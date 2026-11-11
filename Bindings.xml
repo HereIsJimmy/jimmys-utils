@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="JIMMYSUTILS_RECIPES" header="JIMMYSUTILS" category="ADDONS">
+		JimmysUtils_FindRecipesHovered()
+	</Binding>
+</Bindings>
