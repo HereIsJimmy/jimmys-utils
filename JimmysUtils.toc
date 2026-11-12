@@ -15,6 +15,7 @@ Core.lua
 Tooltip.lua
 RangeCheck.lua
 Recipes.lua
+Inventory.lua
 Mail.lua
 MailMaterials.lua
 Minimap.lua

@@ -16,8 +16,9 @@ materials, see [Minimap button](#minimap-button)):
   ingredient, which of your characters know each one and, where the client allows it, where to get the recipes nobody knows.
 - **Recent mail recipients** - a small panel docked next to the Send Mail tab of the mailbox that lists the last 10 characters
   you sent mail to; click a name to fill in the "To:" box.
-- **Recipe materials in your mail** - a window that lists the recipes your character knows which use items waiting in your
-  mailbox, with how many of each ingredient you have and how many you still lack.
+- **Recipe materials in your mail** - a window that lists the recipes your characters know which use items waiting in your
+  mailbox, with how many of each ingredient they have (bags, bank and mail, saved for the characters you are not playing) and how many they
+  still lack, so you can see which of your other characters could craft something with the mail.
 
 Each of the four features (stat weight scores, range check, recipe lookup, mail) can be switched on and off on its own, see
 [Feature toggles](#feature-toggles).
@@ -173,33 +174,63 @@ while hovering works; for tooltips that don't refresh (e.g. a clicked chat link)
 ### Recipe materials in your mail
 
 While the mailbox is open, the addon keeps a record of the inbox (the letters the client has loaded, up to 50). `/ju materials` opens a
-window titled **Materials in your mail** that lists the recipes **the current character knows** which use items from that mail. Each recipe has a
-header with its icon, name and profession, and either **Craftable** (green) or **Missing N items** (orange: the total number of
-ingredient items still lacking for one craft), followed by one line per ingredient:
+window titled **Materials in your mail** that lists the recipes which use items from that mail, grouped by character: **the current
+character first** (`Jamie (this character)`), then **your other characters on the same realm** that know such a recipe, by name (mail cannot
+cross realms, so characters of other realms are never listed). Each recipe has a header with its icon, name and profession, and either
+**Craftable** (green) or **Missing N items** (orange: the total number of ingredient items still lacking for one craft), followed by one
+line per ingredient:
 
 ```
 Silverleaf  3/5 (2 in mail) - need 2 more
 ```
 
-`3/5` is what you have against what one craft needs. What you have is what is in your bags, bank, reagent bank and account bank plus
-what is in the mail (the part from the mail is shown in brackets; bank counts can be out of date away from the bank). A line is red
-while something is missing and green when there is enough. `(COD)` marks ingredients that come in a letter with a cash on delivery
-request. An ingredient that comes in several interchangeable items (for example the quality tiers of an herb) is one line, marked
-`(any quality)`: what you have of all of them is added up against the quantity the recipe needs, as in the game's own recipe tracker, and the
-name shown is the item you have most of. Recipes saved by an older version have one line per item until their profession window is opened
-again. Craftable recipes come first, then the ones with the fewest missing items, then by name. Double-click a recipe's header to open
-it in your profession window.
+`3/5` is what the character has against what one craft needs. A line is red while something is missing and green when there is enough.
+`(COD)` marks ingredients that come in a letter with a cash on delivery request. An ingredient that comes in several interchangeable items
+(for example the quality tiers of an herb) is one line, marked `(any quality)`: what the character has of all of them is added up against the
+quantity the recipe needs, as in the game's own recipe tracker, and the name shown is the item it has most of. Recipes saved by an older
+version have one line per item until their profession window is opened again. Within a character, craftable recipes come first, then the
+ones with the fewest missing items, then by name. Double-click a recipe's header to open it in your profession window (only recipes of the
+current character: for another character's recipe the chat says who knows it; log in to that character to craft it).
+
+What counts for each character:
+
+| | Counts | Shown as |
+|---|---|---|
+| **Current character** | its bags and reagent bag (live), its **saved bank** and the **saved account bank**, and the mailbox you have open. Until its bank has been saved once, the game's own live count (with the bank and account bank) is used instead, and the saved account bank is not added on top | `(N in mail)` |
+| **Another character** | its **saved bags, bank and account bank** (what its last visit saw), its **own saved mailbox**, and the items in the mailbox you have open, which could be sent to it | `(N in their mail)` and `(N in your mail)` |
+
+A recipe is listed for a character when one of its ingredients is in the mailbox you have open or in that character's own saved mailbox. When
+a character needs items from the mailbox you have open to complete a recipe (its own items fall short), the recipe says **Craftable after
+mail** (hover it for "Craftable after sending the mail items."): send those items to that character first. The current character's own mail
+is never counted twice. The grey line under each character's name says how old what is known of its items is: `bags 2 hours ago, bank 3 days
+ago, mail 1 day ago, account bank 1 day ago`, or `bank never seen - open the bank on that character` when its bank was never opened with this
+addon (the bank of the current character: `open your bank to include it`), or `mailbox never seen` (with `(items sent 5 minutes ago)` for
+items you mailed to it from another character since its last scan).
+
+The check box **Show other characters** at the top of the window (saved, on by default) limits the list to the current character.
 
 - **Opening it.** Only `/ju materials` opens it (and closes it again); it never opens by itself. Close it with its close button or Escape.
   While it is open it follows mailbox and bag changes. It can be moved; its position is remembered. Until you move it, it sits to the
   right of the mailbox, the open letter and the recent recipients panel.
-- **Away from the mailbox.** The last scan is saved per character (when, and which items), so `/ju materials` also works elsewhere,
-  and the window says how old the mail data is ("From your mailbox, 5 minutes ago"). The ingredient counts in your bags are always current
-  and follow bag changes while the window is open. The snapshot is only refreshed at a mailbox.
+- **Away from the mailbox.** The last scan of each character's mailbox is saved (when, and which items), so `/ju materials` also works
+  elsewhere, and the window says how old the mail data is ("From your mailbox, 5 minutes ago"). The bag counts of the current character are
+  always current and follow bag changes while the window is open. The snapshot of a mailbox is only refreshed at that character's mailbox.
+- **Saved items of your characters.** The addon saves what each character carries, account-wide (see Saved data): the bags on login and
+  whenever they change; the bank (the character's bank tabs) **only while the bank is open**, and it keeps the last snapshot after closing
+  it; the account (warband) bank when you visit a bank that can show it, one snapshot for every character; and each character's mailbox. A
+  character's data is only as fresh as its last visit. Items you mail to one of your other characters (a recipient written as `Name` or
+  `Name-Realm`, in any case, on the current realm) are added to that character's saved mailbox when the game confirms the letter; the
+  character's next scan of its own mailbox replaces everything.
+- **Forgetting a character.** `/ju recipes forget <character>` removes the character's recipes together with its saved bags, bank and
+  mailbox. Characters that are not saved as knowing a recipe are not listed anyway.
 - **More than 50 letters.** The client lists at most 50 letters at a time; the window then says "Only the first 50 mails are scanned; take some
   mail to see the rest."
-- **Recipes.** The recipes are the ones saved by the recipe lookup, so open each of your profession windows once. Without any, the
-  window says so.
+- **Recipes.** The recipes are the ones saved by the recipe lookup, so open each of your profession windows once on each character.
+  Without any (for every character that is shown), the window says so.
+- **Limits.** Mail sent to one of your characters is added to its saved mailbox when the game confirms the letter. If you close the mailbox before the
+  confirmation arrives, the letter is not recorded (the addon forgets unconfirmed letters when the mailbox closes), and mail that is returned to you,
+  or that a character takes out of its mailbox, is only noticed at that character's next mailbox visit. Other characters' bags, bank and mailbox are as old as
+  their last visit (the window shows how old), and the account bank is one shared snapshot.
 
 The **Mail** tab ends with a one-line reminder of the `/ju materials` command.
 
@@ -251,13 +282,13 @@ kept), and a **Clear recent recipients** button, which empties the list of the c
 | `/ju recipes` | The same for the item you are pointing at (prints the usage when there is none) |
 | `/ju recipes status` | Show how many recipes are saved, per profession and per character, and what the client gives the addon: whether `GetAllRecipeIDs` exists and, with a profession window open, how many recipes it and `GetFilteredRecipeIDs` return and how many are not learned (`scan` still works as an alias; recipes are saved when you open a profession window, this command does not save anything itself) |
 | `/ju recipes forget` | Ask to delete the saved recipes; `/ju recipes forget confirm` really deletes them |
-| `/ju recipes forget <character>` | Ask to remove one character (`Name`, or `Name-Realm` when the name exists on several realms) from the saved recipes; add `confirm` to do it |
+| `/ju recipes forget <character>` | Ask to remove one character (`Name`, or `Name-Realm` when the name exists on several realms) from the saved recipes, together with its saved bags, bank and mailbox; add `confirm` to do it |
 | `/ju mail` | Show whether the mail features (recent recipients and mail materials) are on, how many recipients are saved for this realm, and the usage |
 | `/ju mail on` / `/ju mail off` | Turn the mail features on or off: the recent recipients panel and its recording, and the mailbox scan and window of the mail materials |
 | `/ju mail clear` | Forget the recent recipients of the current realm |
 | `/ju minimap` | Show or hide the minimap button (prints which) |
 | `/ju minimap reset` | Move the minimap button back to its default place (bottom left) |
-| `/ju materials` | Open or close the window with the recipes your mail has materials for (works away from the mailbox, from the last scan; says so when the mail features are off) |
+| `/ju materials` | Open or close the window with the recipes your mail has materials for, for this character and (check box **Show other characters**) your other characters on this realm (works away from the mailbox, from the saved scans; says so when the mail features are off) |
 
 ## How the score is computed
 
@@ -310,11 +341,29 @@ Stats with a weight of 0 do not contribute. The tooltip line is hidden for items
   before the mailbox closes is never lost; only the refresh of an open window waits half a second after the last one. Nothing is read
   after `MAIL_CLOSED`, and nothing before the first `MAIL_SHOW` (so after a `/reload` at an open mailbox it starts working at the next visit). It reads `GetInboxNumItems()` (the second result, the total, tells when there are more letters than listed),
   `GetInboxHeaderInfo(i)` (the cash on delivery amount and the attachment count) and `GetInboxItem(i, 1..ATTACHMENTS_MAX_RECEIVE)` (16 when the global is
-  missing); currencies and anything that is a secret value (or not a plain number) are skipped, and a secret COD amount counts as no COD. Owned counts
-  come from `C_Item.GetItemCount(id, true, false, true, true)` inside a `pcall`, falling back to `GetItemCount(id, true)`; `BAG_UPDATE_DELAYED` refreshes an open
+  missing); currencies and anything that is a secret value (or not a plain number) are skipped, and a secret COD amount counts as no COD. The live count of the
+  current character comes from `C_Item.GetItemCount(id, includeBank, false, includeBank, includeAccountBank)` inside a `pcall` (falling back to `GetItemCount(id, includeBank)`), where the bank flags
+  are false (bags and reagent bag only) when the character's bank was saved, and the saved bank and account bank are added; when it was not, everything is true and nothing saved is
+  added (so the account bank is never counted twice); `BAG_UPDATE_DELAYED` refreshes an open
   window. The window is its own frame (`JimmysUtilsMailMaterialsFrame`); nothing of
   Blizzard's code is hooked or replaced.
   The recipes' ingredient slots are saved by the recipe scan (`slots` next to the flat `reagents` map) following `required` / `reagentType` like Blizzard's recipe tracker. Without a saved position the window is placed right of the mailbox, the open letter (46 px right of the mailbox, 338 wide) and the recent recipients panel docked to it, or at the right edge of a screen too narrow for that. Owned counts and item names are asked once per refresh.
+- **Item snapshots (`Inventory.lua`).** This client has no separate reagent bank: the reagent bag is container `Enum.BagIndex.ReagentBag` (5), the
+  character bank is a set of tabs (`CharacterBankTab_1..9`, container IDs 6 to 14, listed by `C_Bank.FetchPurchasedBankTabIDs(Enum.BankType.Character)`) and the
+  account (warband) bank is `AccountBankTab_1..9` (IDs 15 to 23, `Enum.BankType.Account`; `C_Bank.CanViewBank` says whether it can be read). The bags are the
+  containers 0 to `NUM_TOTAL_EQUIPPED_BAG_SLOTS` (5), read with `C_Container.GetContainerNumSlots` / `GetContainerItemInfo(bag, slot)` (`itemID`, `stackCount`)
+  inside `pcall`s, skipping secret values. They are rescanned on `PLAYER_ENTERING_WORLD`, `BAG_UPDATE_DELAYED` (one scan one second after the first event of a
+  burst) and `PLAYER_LOGOUT`. The bank is only readable while it is open (after `BANKFRAME_CLOSED` the client says it cannot be viewed): `BANKFRAME_OPENED` sets a flag and scans,
+  every `BAG_UPDATE_DELAYED` while the flag is set rescans it at once (so the last change before closing is kept), the per-slot events (`PLAYERBANKSLOTS_CHANGED`,
+  `PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED`, `BANK_TABS_CHANGED`, `BAG_CONTAINER_UPDATE`) rescan it on the next frame, `PLAYER_LOGOUT` rescans it if it is open, and `BANKFRAME_CLOSED`
+  clears the flag without reading. A scan that reads nothing never replaces a snapshot. Without `C_Bank` the tabs named in `Enum.BagIndex` are used. The
+  data is validated at load (bad entries dropped); the old per-character `mailItems` is moved into `inventory[character].mail` once `GetNormalizedRealmName()` answers (at load, or
+  at `PLAYER_ENTERING_WORLD`; it stays where it is until then): if the character already has a snapshot made only of sent items, the old scan is the base and the sent items are added on top.
+- **Mail sent to your own characters.** The `SendMail` hook (Mail.lua) reads the letter's attachments with `GetSendMailItem(1..ATTACHMENTS_MAX_SEND)` (name, itemID, texture, count,
+  quality; Blizzard's mail frame only empties them when `MAIL_SEND_SUCCESS` arrives, so they are still there when the hook runs) and queues them with the recipient in the same
+  first-in first-out queue as the recent recipients; `MAIL_SEND_SUCCESS` takes the oldest entry and, when its recipient (case-insensitive `Name`, or `Name-Realm` of this
+  realm, never the current character) is a character the addon knows, adds the items to that character's mail snapshot (`sentTime`; `GetSendMailCOD() > 0` also marks them COD; realms are compared without spaces, hyphens and case); `MAIL_FAILED` without an item ID,
+  `MAIL_SHOW` and `MAIL_CLOSED` drop queued letters. Nothing is read while the mail features are off.
 - **Inspecting the API.** If a score looks wrong, shift-click the item and run `/ju dump <item link>`. It prints the raw
   `C_Item.GetItemStats` table, the "Equip:" effects that were parsed, and the final calculation.
 - **Detected stats.** Any stat the API reports that is not in the built-in list (for example socket counts or stats new to Forever)
@@ -350,8 +399,9 @@ A quick first session:
    mailbox). Click the name to fill in the "To:" box (also while a letter is open: check the panel does not cover it), right-click it to remove it, and check `/ju mail off` (the panel disappears, new recipients are not recorded, `/ju materials` says the mail features are off),
    `/ju mail on` and `/ju mail clear`.
    Also try each feature's off switch (`/ju stats off`, `/ju range`, `/ju recipes off`, `/ju mail off`, or the check boxes) and `/ju status`.
-10. Recipe materials: open your profession windows once, then send one of your characters a letter holding an ingredient of a recipe it knows (or
-    use mail you already have). Open the mailbox: nothing should open by itself. Type `/ju materials`: the
+10. Recipe materials: open your profession windows once on each character, and open the bank (and the account bank) once on each, then send one of your characters a letter holding an ingredient of a recipe it knows (or
+    use mail you already have). Log in on another character of the same realm: `/ju materials` should list it under its own header with `bags ... ago, bank ... ago`, and with the
+    first character's mail items marked `(N in your mail)` and **Craftable after mail** when they are needed. Mail yourself items from one character to another and check they appear as `(N in their mail)` there. Open the mailbox: nothing should open by itself. Type `/ju materials`: the
     **Materials in your mail** window should list the recipe and show the ingredient counts. Check the numbers against your bags, that a COD
     letter is marked, that **Craftable** appears when nothing is missing, that double-click opens the recipe, that taking the mail out of the
     inbox updates the counts while the window is open, and that `/ju materials` also works away from the mailbox (it then says how old the data is).
@@ -368,7 +418,8 @@ A quick first session:
 - `RangeCheck.lua` - the range check indicator, its settings and the `/ju range` command
 - `Recipes.lua` - recipe scanning and saved data, item lookup, the results window, the key binding function and `/ju recipes`
 - `Mail.lua` - the recent mail recipients: capture, saved list, the panel next to the mailbox and `/ju mail`
-- `MailMaterials.lua` - the recipe materials in your mail: inbox scan, per-character snapshot, the window and `/ju materials`
+- `Inventory.lua` - the saved bags, bank, account bank and mailbox of each character, and mail sent to your own characters
+- `MailMaterials.lua` - the recipe materials in your mail: inbox scan, the window (grouped by character) and `/ju materials`
 - `Minimap.lua` - the minimap button, its saved position, the addon compartment callbacks and `/ju minimap`
 - `Media\MinimapIcon.tga` - the icon of the minimap button and of the addon compartment entry (64x64, 32-bit with alpha)
 - `Bindings.xml` - the "Find recipes using hovered item" key binding (loaded automatically, not listed in the `.toc`)
@@ -379,7 +430,8 @@ A quick first session:
 Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, last tab, and the
 saved recipes: `recipes`, `recipeKnownBy` with the characters that know each recipe as `Name-Realm`, and `itemNames` with the names
 of ingredients; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
-the materials window; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the active profile, the range check spell and `mailItems`, the last scan of the mailbox). The variable names are unchanged from the
+the materials window and `showOthers`; `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
+(with the times they were seen), and `accountBank` with the account bank's items; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the active profile, and the range check spell; older versions also kept `mailItems`, the last scan of the mailbox, here: it is moved into `inventory` at load). The variable names are unchanged from the
 addon's previous name, but the client stores them in a file named after the addon folder, i.e. now
 `WTF\Account\<account>\SavedVariables\JimmysUtils.lua` and `WTF\Account\<account>\<realm>\<character>\SavedVariables\JimmysUtils.lua`.
 To keep the data of the old Jimmy's Stat Weights, log out and rename its `JimmysStatWeights.lua` files (the account-wide one and the

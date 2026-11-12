@@ -1217,6 +1217,7 @@ local function BuildWindow()
 	end
 
 	window = CreateFrame("Frame", FRAME_NAME, UIParent, "DefaultPanelFlatTemplate")
+	if ns.MakeOpaque then ns.MakeOpaque(window) end
 	local frame = window
 	-- New frames start shown; hide it so the first Show() fires OnShow.
 	frame:Hide()

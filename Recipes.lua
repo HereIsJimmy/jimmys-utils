@@ -391,7 +391,7 @@ local function SetKnown(recipeID, character, known)
 	end
 end
 
--- Characters ("Name-Realm") that appear in the saved known-by data and match the text: a full "Name-Realm" or just
+-- Characters ("Name-Realm") that appear in the saved known-by data or the saved items and match the text: a full "Name-Realm" or just
 -- "Name" (case-insensitive; only ASCII letters change case, other characters are compared as they are).
 function ns.FindSavedCharacters(text)
 	local matches, seen = {}, {}
@@ -400,24 +400,31 @@ function ns.FindSavedCharacters(text)
 		return matches
 	end
 	local withRealm = query:find("-", 1, true) ~= nil
-	for _, characters in pairs(knownBy or {}) do
-		for character in pairs(characters) do
-			if not seen[character] then
-				seen[character] = true
-				local lowered = character:lower()
-				local name = lowered:match("^([^%-]+)") or lowered
-				if (withRealm and lowered == query) or (not withRealm and name == query) then
-					matches[#matches + 1] = character
-				end
+	local function Consider(character)
+		if not seen[character] then
+			seen[character] = true
+			local lowered = character:lower()
+			local name = lowered:match("^([^%-]+)") or lowered
+			if (withRealm and lowered == query) or (not withRealm and name == query) then
+				matches[#matches + 1] = character
 			end
 		end
+	end
+	for _, characters in pairs(knownBy or {}) do
+		for character in pairs(characters) do
+			Consider(character)
+		end
+	end
+	-- Characters with saved bags, bank or mail but no recipes can be forgotten too.
+	for _, character in ipairs(ns.GetInventoryCharacters and ns.GetInventoryCharacters() or {}) do
+		Consider(character)
 	end
 	table.sort(matches)
 	return matches
 end
 
--- Removes a character ("Name-Realm", as returned by FindSavedCharacters) from every recipe. Returns how many recipes
--- it was known for.
+-- Removes a character ("Name-Realm", as returned by FindSavedCharacters) from every recipe, and its saved bags, bank
+-- and mailbox (Inventory.lua). Returns how many recipes it was known for.
 function ns.ForgetCharacter(character)
 	local count = 0
 	for recipeID, characters in pairs(knownBy) do
@@ -426,7 +433,8 @@ function ns.ForgetCharacter(character)
 			SetKnown(recipeID, character, false)
 		end
 	end
-	if count > 0 then
+	local forgotInventory = ns.ForgetInventory and ns.ForgetInventory(character) or false
+	if count > 0 or forgotInventory then
 		Wipe(lastSignature)
 		NotifyChanged()
 	end
@@ -996,17 +1004,16 @@ function ns.OpenRecipeInProfession(entry)
 	return true
 end
 
--- The saved recipes the current character knows, sorted by recipe ID: { recipeID, name, icon, profession, output,
+-- The saved recipes a character ("Name-Realm") knows, sorted by recipe ID: { recipeID, name, icon, profession, output,
 -- reagents = { [itemID] = quantity }, slots = { { items = { itemID, ... }, quantity } } } (copies; the slots of a recipe
 -- saved without them are one per ingredient).
-function ns.GetKnownRecipesHere()
+function ns.GetKnownRecipes(character)
 	local list = {}
-	local ownKey = GetCharacterKey()
-	if not (ownKey and recipes) then
+	if not (type(character) == "string" and recipes) then
 		return list
 	end
 	for recipeID, record in pairs(recipes) do
-		if (knownBy[recipeID] or {})[ownKey] == true then
+		if (knownBy[recipeID] or {})[character] == true then
 			local reagents = {}
 			for itemID, quantity in pairs(record.reagents) do
 				reagents[itemID] = quantity
@@ -1042,6 +1049,26 @@ function ns.GetKnownRecipesHere()
 	table.sort(list, function(a, b)
 		return a.recipeID < b.recipeID
 	end)
+	return list
+end
+
+-- The same for the current character.
+function ns.GetKnownRecipesHere()
+	return ns.GetKnownRecipes(GetCharacterKey())
+end
+
+-- Every character ("Name-Realm") that is saved as knowing a recipe, sorted.
+function ns.GetKnownRecipeCharacters()
+	local seen, list = {}, {}
+	for _, characters in pairs(knownBy or {}) do
+		for character in pairs(characters) do
+			if not seen[character] then
+				seen[character] = true
+				list[#list + 1] = character
+			end
+		end
+	end
+	table.sort(list)
 	return list
 end
 
@@ -1332,6 +1359,7 @@ local function BuildWindow()
 	end
 
 	window = CreateFrame("Frame", FRAME_NAME, UIParent, "DefaultPanelFlatTemplate")
+	if ns.MakeOpaque then ns.MakeOpaque(window) end
 	local frame = window
 	-- New frames start shown; hide it so the first Show() fires OnShow.
 	frame:Hide()
@@ -1515,6 +1543,7 @@ local function BuildLinkPopup()
 	end
 
 	linkPopup = CreateFrame("Frame", LINK_POPUP_NAME, UIParent, "DefaultPanelFlatTemplate")
+	if ns.MakeOpaque then ns.MakeOpaque(linkPopup) end
 	local frame = linkPopup
 	frame:Hide()
 	frame:SetSize(LINK_POPUP_WIDTH, LINK_POPUP_HEIGHT)

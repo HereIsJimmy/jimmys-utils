@@ -19,7 +19,7 @@
 | **Range check** | Shows the icon of a spell you pick next to your target's nameplate (or at a fixed spot on screen), tinted red while the target is out of range. |
 | **Recipe lookup** | Hover an item and press a key (or `/ju recipes <item>`) to list the recipes that use it, which of your characters know them, and a Wowhead link for each. Double-click a recipe to open it in your profession window. |
 | **Recent mail recipients** | A panel next to the Send Mail tab with the last 10 characters you mailed. Click a name to fill in the "To:" box. |
-| **Materials in your mail** | `/ju materials` lists the recipes you know that use items waiting in your mailbox, with how many of each ingredient you have, how many you still need, and which recipes are already craftable. |
+| **Materials in your mail** | `/ju materials` lists the recipes that use items waiting in your mailbox, with how many of each ingredient (bags, bank and mail) you have, how many you still need, and which recipes are already craftable. It also shows what your other characters on the realm could craft, from their saved bags, bank and mail (including items you mail them), and which need the mail sent first. |
 
 Every feature can be switched on or off on its own. A minimap button (also listed in the addon compartment) opens the settings
 with a left-click and the mail materials with a right-click.
@@ -74,14 +74,15 @@ The complete list, with every option explained, is in the [full guide](docs/GUID
 
 - Built for the **WoW Forever** client (interface `16001`).
 - No library dependencies.
-- Settings are saved account-wide (stat weight profiles, recipes, mail recipients) and per character (active profile,
-  range spell, last mailbox scan).
+- Settings are saved account-wide (stat weight profiles, recipes, mail recipients, each character's bags, bank and mailbox, the account bank) and per character (active profile,
+  range spell). `/ju recipes forget <character>` also removes that character's saved items.
 
 ## Known limitations
 
 - Addons can't open web pages, so Wowhead links are shown in a box to copy (Ctrl+C) and paste into your browser.
 - The recipe lookup only knows recipes from profession windows you have opened; it has no built-in recipe database.
 - The game only gives addons the first 50 letters of the inbox, so the materials window can miss items in older mail.
+- The bags, bank and mail of your other characters are only as fresh as their last visit: log in on a character and open its bank (and mailbox) once to save them. The bank can only be read while it is open.
 
 ## Feedback
 

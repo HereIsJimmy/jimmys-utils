@@ -11,7 +11,9 @@ local addonName, ns = ...
 	Capture: hooksecurefunc on SendMail queues the recipient (a short first-in first-out queue, since a second letter can
 	be sent before the first is confirmed); MAIL_SEND_SUCCESS moves the oldest queued recipient into the history,
 	MAIL_FAILED without an item ID drops it (with an item ID it is an inbox failure and the queue is left alone), and
-	MAIL_SHOW and MAIL_CLOSED forget the queue. Only hooksecurefunc and HookScript are used on Blizzard's code, so nothing
+	MAIL_SHOW and MAIL_CLOSED forget the queue. The attachments of each letter (GetSendMailItem) are queued with its recipient and,
+	when the letter is confirmed and goes to one of your other characters on the realm, handed to ns.RecordSentMail
+	(Inventory.lua) so that character's mailbox snapshot counts them. Only hooksecurefunc and HookScript are used on Blizzard's code, so nothing
 	of it is replaced or tainted. Secret values are never branched on: a secret recipient is ignored. While the feature is
 	off nothing is recorded (the queue still follows the mails, so it stays in step) and the panel stays hidden.
 
@@ -26,6 +28,8 @@ local MAX_NAME_BYTES = 80 -- "Name-Realm" is far shorter; anything longer is not
 local PANEL_WIDTH = 150
 local PANEL_OFFSET_X = 2
 local MAX_QUEUED = 3 -- letters sent but not yet confirmed that are remembered
+local DEFAULT_SEND_ATTACHMENTS = 12 -- ATTACHMENTS_MAX_SEND
+local MAX_SEND_ATTACHMENTS = 64
 local PADDING = 8
 local TITLE_HEIGHT = 24 -- the rows start this far below the top of the panel
 local ROW_HEIGHT = 18
@@ -47,7 +51,7 @@ local BACKDROP = {
 local settings, history
 local panel -- nil until MailFrame exists
 local rows = {}
-local queue = {} -- recipients of the SendMail calls that are not confirmed yet, oldest first (false: not a usable name)
+local queue = {} -- the SendMail calls that are not confirmed yet, oldest first: { recipient = name (false: not a usable name), items = { [itemID] = quantity } or nil, cod = bool }
 local initialized = false
 
 --------------------------------------------------------------------------------
@@ -71,6 +75,40 @@ local function NormalizeName(text)
 		return nil
 	end
 	return name
+end
+
+-- The items attached to the letter being sent: { [itemID] = quantity }, or nil when there are none. GetSendMailItem returns
+-- name, itemID, texture, count, quality; every result is read through pcall and a secret or odd one is skipped.
+local function ReadSendItems()
+	if type(GetSendMailItem) ~= "function" then
+		return nil
+	end
+	local max = ATTACHMENTS_MAX_SEND
+	if IsSecret(max) or type(max) ~= "number" or max < 1 or max > MAX_SEND_ATTACHMENTS then
+		max = DEFAULT_SEND_ATTACHMENTS
+	end
+	local items = {}
+	for index = 1, max do
+		local ok, _, itemID, _, count = pcall(GetSendMailItem, index)
+		if ok and not IsSecret(itemID) and not IsSecret(count) and type(itemID) == "number" and type(count) == "number"
+			and itemID > 0 and count > 0 and itemID == math.floor(itemID) and count == math.floor(count) then
+			items[itemID] = (items[itemID] or 0) + count
+		end
+	end
+	if next(items) == nil then
+		return nil
+	end
+	return items
+end
+
+-- Does the letter being written ask for cash on delivery? (GetSendMailCOD returns the amount in copper; a secret or odd answer
+-- counts as no.)
+local function ReadSendCOD()
+	if type(GetSendMailCOD) ~= "function" then
+		return false
+	end
+	local ok, amount = pcall(GetSendMailCOD)
+	return ok and not IsSecret(amount) and type(amount) == "number" and amount > 0
 end
 
 -- A realm name without spaces, or nil when the client gave nothing usable.
@@ -357,7 +395,7 @@ local function CreatePanel()
 	panel:EnableMouse(true) -- clicks on the panel's gaps do not fall through to the world
 	if panel.SetBackdrop then
 		panel:SetBackdrop(BACKDROP)
-		panel:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+		panel:SetBackdropColor(0.05, 0.05, 0.05, 1)
 		panel:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 	end
 
@@ -484,11 +522,14 @@ function ns.InitMail(db)
 
 	if hooksecurefunc and type(SendMail) == "function" then
 		hooksecurefunc("SendMail", function(recipient)
-			-- An unusable recipient still takes its place in the queue, so the confirmations stay in step.
+			-- An unusable recipient still takes its place in the queue, so the confirmations stay in step. The attachments
+			-- are read now: Blizzard's mail frame empties them only when MAIL_SEND_SUCCESS arrives.
 			if #queue >= MAX_QUEUED then
 				table.remove(queue, 1)
 			end
-			queue[#queue + 1] = NormalizeName(recipient) or false
+			local name = NormalizeName(recipient) or false
+			local items = name and settings and settings.enabled and ReadSendItems() or nil
+			queue[#queue + 1] = { recipient = name, items = items, cod = items ~= nil and ReadSendCOD() }
 		end)
 	end
 
@@ -503,9 +544,13 @@ function ns.InitMail(db)
 				self:UnregisterEvent("ADDON_LOADED")
 			end
 		elseif event == "MAIL_SEND_SUCCESS" then
-			local recipient = table.remove(queue, 1)
-			if recipient and settings.enabled then
-				ns.AddMailRecipient(recipient)
+			local sent = table.remove(queue, 1)
+			if sent and sent.recipient and settings.enabled then
+				ns.AddMailRecipient(sent.recipient)
+				-- Items sent to one of your other characters will be in its mailbox (Inventory.lua).
+				if sent.items and ns.RecordSentMail then
+					ns.RecordSentMail(sent.recipient, sent.items, sent.cod)
+				end
 			end
 		elseif event == "MAIL_FAILED" then
 			-- Failures to take an item out of the inbox carry the item's ID; only a failed letter has none.

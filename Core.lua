@@ -20,11 +20,13 @@ local addonName, ns = ...
 		recipes, recipeKnownBy, itemNames, -- saved recipes, validated in Recipes.lua
 		mail = { enabled }, -- master switch of the recent recipients and the mail materials, validated in Mail.lua
 		mailRecipients = { [realmKey] = { names } }, -- recent mail recipients, validated in Mail.lua
-		mailMaterials = { position }, -- the "materials in your mail" window, validated in MailMaterials.lua
+		mailMaterials = { position, showOthers }, -- the "materials in your mail" window, validated in MailMaterials.lua
+		inventory = { ["Name-Realm"] = { bags, bagsTime, bank, bankTime, mail } }, -- item snapshots (and the last scan of the mailbox) per character, validated in Inventory.lua
+		accountBank = { items, time }, -- the account bank, validated in Inventory.lua
 		minimap = { hide, angle }, -- the minimap button, validated in Minimap.lua
 	}
-	JimmysStatWeightsCharDB = { profile = "Default", rangeSpell = spellID,
-		mailItems = { time, counts, cod, partial } } -- last scan of this character's mailbox, validated in MailMaterials.lua
+	JimmysStatWeightsCharDB = { profile = "Default", rangeSpell = spellID }
+	-- (older versions also kept mailItems here: the last scan of the mailbox, now db.inventory[character].mail)
 ]]
 
 local DB_VERSION = 2
@@ -95,6 +97,19 @@ function ns.FormatNumber(value, maxDecimals)
 		text = "0"
 	end
 	return text
+end
+
+-- The panel templates draw a slightly see-through background; put a solid layer under it so the addon's windows
+-- are opaque. Only touches the addon's own frames.
+function ns.MakeOpaque(frame)
+	if not frame or frame.jimmysOpaque then
+		return
+	end
+	local host = frame.Bg or frame
+	local solid = host:CreateTexture(nil, "BACKGROUND", nil, -8)
+	solid:SetAllPoints(host)
+	solid:SetColorTexture(0.06, 0.06, 0.07, 1)
+	frame.jimmysOpaque = solid
 end
 
 function ns.Print(msg)
@@ -482,11 +497,11 @@ local HELP_LINES = {
 	"/ju recipes - the same for the item you are pointing at (also: the key binding under Options > Keybindings > AddOns)",
 	"/ju recipes status - show what is saved and what the client gives the addon (recipes are learned whenever you open a profession window)",
 	"/ju recipes forget - delete the saved recipes (asks you to repeat it with confirm)",
-	"/ju recipes forget <character> - remove one character (Name or Name-Realm) from the saved recipes (asks for confirm too)",
+	"/ju recipes forget <character> - remove one character (Name or Name-Realm) from the saved recipes, with its saved bags, bank and mail (asks for confirm too)",
 	"/ju mail - show whether the mail features (recent recipients and mail materials) are on; /ju mail on | off - turn them on or off",
 	"/ju mail clear - forget the recent mail recipients of this realm",
 	"/ju minimap - show or hide the minimap button; /ju minimap reset - move it back to its default place",
-	"/ju materials - open or close the window listing the recipes your mail has materials for (also works away from the mailbox; needs the mail features on)",
+	"/ju materials - open or close the window listing the recipes your mail has materials for, for this character and (with the check box in the window) your other characters on this realm; bags, bank and the mail of each character count (also works away from the mailbox; needs the mail features on)",
 }
 
 -- Every stat the user might want to address: the static list, then detected and stored keys.
@@ -866,6 +881,9 @@ loader:SetScript("OnEvent", function(self, event, loadedName)
 	end
 	if ns.InitRecipes then
 		ns.InitRecipes(db)
+	end
+	if ns.InitInventory then
+		ns.InitInventory(db, charDb)
 	end
 	if ns.InitMail then
 		ns.InitMail(db)
