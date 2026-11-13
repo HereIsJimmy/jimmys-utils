@@ -1,7 +1,7 @@
 local addonName, ns = ...
 
 --[[
-	Recipe lookup: lists the recipes that use an item as an ingredient, and where to get the ones no character knows.
+	Recipe lookup: lists the recipes that use an item as an ingredient, with the materials each one needs and who knows it.
 
 	The game only lists a profession's recipes while its window is open, so there is no bundled database: whenever one of
 	the player's own profession windows opens (or its list updates) the recipes are read and saved account-wide.
@@ -9,6 +9,7 @@ local addonName, ns = ...
 	Saved data (validated in ns.InitRecipes, all keys are additive and optional):
 		JimmysStatWeightsDB.recipes = { [recipeID] = { name, icon, profession, output = itemID, reagents = { [itemID] = quantity },
 			slots = { { items = { itemID, ... }, quantity = n } }, source = text } }
+			(source is the game's "where to get it" text; it is kept, but the window only shows it in a row's tooltip when there is one)
 		JimmysStatWeightsDB.recipeKnownBy = { [recipeID] = { ["Name-Realm"] = true } }
 		JimmysStatWeightsDB.itemNames = { [itemID] = name } -- names of ingredients, so a name can be looked up offline
 		JimmysStatWeightsDB.recipeLookup = { enabled = true } -- off: no recipes are learned and the lookup is closed; what is saved is kept
@@ -29,11 +30,14 @@ local SCROLL_NAME = "JimmysUtilsRecipesScroll"
 local FRAME_WIDTH = 380
 local FRAME_HEIGHT = 360
 local LIST_WIDTH = 316 -- scroll frame width (frame minus margins and the scroll bar)
-local ROW_HEIGHT = 46
+local ROW_TOP_HEIGHT = 40 -- name line and detail line, above the materials
+local ROW_BOTTOM_PADDING = 6
+local MATERIALS_MIN_HEIGHT = 12 -- one line of the small font
+local MATERIALS_WIDTH = LIST_WIDTH - 8
 local ROW_ICON_SIZE = 32
 local HEADER_ICON_SIZE = 28
 local QTY_WIDTH = 40
-local DETAIL_HEIGHT = 26
+local DETAIL_HEIGHT = 18
 local QUESTION_ICON = 134400 -- INV_Misc_QuestionMark
 
 local SCAN_DELAY = 0.5 -- seconds; the profession events come in bursts
@@ -44,7 +48,7 @@ local MAX_NOT_READY_RETRIES = 20 -- how often a scan waits for a profession wind
 local WOWHEAD_BASE = "https://www.wowhead.com/forever/"
 local LINK_POPUP_NAME = "JimmysUtilsLinkPopup"
 local LINK_POPUP_WIDTH = 360
-local LINK_POPUP_HEIGHT = 150
+local LINK_POPUP_HEIGHT = 170
 local LINK_BOX_WIDTH = 320
 local LINK_BUTTON_WIDTH = 60
 local LINK_BUTTON_HEIGHT = 18
@@ -54,12 +58,30 @@ local UNKNOWN_NAME_COLOR = { 0.72, 0.72, 0.72 }
 local KNOWN_TEXT_COLOR = "ff33ff33"
 local UNKNOWN_TEXT_COLOR = "ffff9933"
 local GREY_TEXT_COLOR = "ff999999"
+local ENOUGH_TEXT_COLOR = "ff40ff40" -- a material you have enough of for one craft
+local MISSING_TEXT_COLOR = "ffff9020" -- a material you have some of, but too little
+local NONE_TEXT_COLOR = "ffff3030" -- a material you have none of
+
+-- Prefix of the name of the item that teaches a recipe, by (lowercase) profession: "Recipe: Minor Healing Potion". Recipes of
+-- other professions, or of a client in another language, have no prefix here and are searched by their plain name.
+local RECIPE_ITEM_PREFIXES = {
+	["alchemy"] = "Recipe",
+	["cooking"] = "Recipe",
+	["blacksmithing"] = "Plans",
+	["leatherworking"] = "Pattern",
+	["tailoring"] = "Pattern",
+	["engineering"] = "Schematic",
+	["enchanting"] = "Formula",
+	["first aid"] = "Manual",
+	["jewelcrafting"] = "Design",
+	["inscription"] = "Technique",
+}
 
 -- Calls that, when they return true, mean the open window is not the player's own profession.
 local SKIP_CHECKS = { "IsTradeSkillLinked", "IsTradeSkillGuild", "IsTradeSkillGuildMember", "IsNPCCrafting", "IsRuneforging" }
 local SCAN_EVENTS = {
 	"TRADE_SKILL_SHOW", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "NEW_RECIPE_LEARNED", "TRADE_SKILL_CLOSE",
-	"PLAYER_LOGIN", "SKILL_LINES_CHANGED", "ITEM_DATA_LOAD_RESULT",
+	"PLAYER_LOGIN", "SKILL_LINES_CHANGED", "ITEM_DATA_LOAD_RESULT", "BAG_UPDATE_DELAYED",
 }
 
 local DEFAULT_LOOKUP = {
@@ -293,8 +315,7 @@ local function InitData(database)
 			end
 			if type(record.source) ~= "string" or record.source == "" then
 				record.source = nil
-			end
-		end
+			end		end
 	end
 
 	for recipeID, characters in pairs(knownBy) do
@@ -1072,6 +1093,38 @@ function ns.GetKnownRecipeCharacters()
 	return list
 end
 
+-- The materials of one craft, for the rows: { { items = { itemID, ... }, quantity, highlight } }. Without saved slots (recipes
+-- saved before they were kept) it is one entry per ingredient sorted by name; the entry holding the looked-up item is highlighted.
+local function BuildMaterials(record, itemID)
+	local materials = {}
+	if record.slots then
+		for _, slot in ipairs(record.slots) do
+			local items, highlight = {}, false
+			for i, slotItem in ipairs(slot.items) do
+				items[i] = slotItem
+				if slotItem == itemID then
+					highlight = true
+				end
+			end
+			materials[#materials + 1] = { items = items, quantity = slot.quantity, highlight = highlight }
+		end
+	else
+		local keys = {}
+		for id, quantity in pairs(record.reagents) do
+			materials[#materials + 1] = { items = { id }, quantity = quantity, highlight = id == itemID }
+			keys[id] = (ns.GetItemName(id) or ("item:" .. id)):lower()
+		end
+		table.sort(materials, function(a, b)
+			local ka, kb = keys[a.items[1]], keys[b.items[1]]
+			if ka ~= kb then
+				return ka < kb
+			end
+			return a.items[1] < b.items[1]
+		end)
+	end
+	return materials
+end
+
 function ns.GetRecipeRows(itemID)
 	local rows = {}
 	local ownKey, ownRealm = GetCharacterKey()
@@ -1098,6 +1151,7 @@ function ns.GetRecipeRows(itemID)
 				quantity = record.reagents[itemID],
 				output = record.output,
 				source = record.source,
+				materials = BuildMaterials(record, itemID),
 				knownBy = characters,
 				known = #characters > 0,
 				knownHere = knownHere,
@@ -1196,20 +1250,97 @@ local function SetWindowTitle(frame, text)
 	end
 end
 
--- Single line of text for a row: the source text can span several lines.
-local function FlattenText(text)
-	text = text:gsub("|n", ", "):gsub("%s*[\r\n]+%s*", ", "):gsub("%s+", " ")
-	return Trim(text)
+-- "Silverleaf x1" for one entry of a row's materials, or "Silverleaf (1/3)" when you have some but not enough (owned is
+-- optional); a slot with several choices says "(any quality)" after the name of the first one. The name is "item:<id>"
+-- until the client has given it.
+local function FormatMaterial(material, owned)
+	local itemID = material.items[1]
+	local text = ns.GetItemName(itemID) or ("item:" .. itemID)
+	if #material.items > 1 then
+		text = text .. " (any quality)"
+	end
+	if owned and owned > 0 and owned < material.quantity then
+		return text .. " (" .. owned .. "/" .. material.quantity .. ")"
+	end
+	return text .. " x" .. material.quantity
+end
+
+-- How many of an item the current character has: bags, bank, reagent bank and account bank (bank counts may be from
+-- the last visit). 0 when the client does not tell.
+local function OwnedCount(itemID)
+	local ok, count
+	if C_Item and C_Item.GetItemCount then
+		ok, count = pcall(C_Item.GetItemCount, itemID, true, false, true, true)
+	end
+	if not ok and GetItemCount then
+		ok, count = pcall(GetItemCount, itemID, true)
+	end
+	if not ok or IsSecret(count) or type(count) ~= "number" then
+		return 0
+	end
+	return count
+end
+
+-- What the current character has of a material (all its interchangeable items together), cached per refresh.
+local function MaterialOwned(material, cache)
+	local total = 0
+	for _, itemID in ipairs(material.items) do
+		local count = cache and cache[itemID]
+		if not count then
+			count = OwnedCount(itemID)
+			if cache then
+				cache[itemID] = count
+			end
+		end
+		total = total + count
+	end
+	return total
+end
+
+-- Color of a material for what you have of it: green when enough for one craft, orange when some, red when none.
+local function MaterialColor(owned, quantity)
+	if owned >= quantity then
+		return ENOUGH_TEXT_COLOR
+	elseif owned > 0 then
+		return MISSING_TEXT_COLOR
+	end
+	return NONE_TEXT_COLOR
+end
+
+-- The materials of a row as one colored text.
+local function FormatMaterials(materials, cache)
+	local parts = {}
+	for i, material in ipairs(materials) do
+		local owned = MaterialOwned(material, cache)
+		parts[i] = "|c" .. MaterialColor(owned, material.quantity) .. FormatMaterial(material, owned) .. "|r"
+	end
+	return table.concat(parts, "|c" .. GREY_TEXT_COLOR .. ", |r")
+end
+
+-- Asks the client for the names of the materials it has not given yet (once each: the ones already asked for arrive with
+-- ITEM_DATA_LOAD_RESULT, which refreshes the window).
+local function RequestMaterialNames(entries)
+	local missing
+	for _, entry in ipairs(entries) do
+		for _, material in ipairs(entry.materials) do
+			local itemID = material.items[1]
+			if not pendingNames[itemID] and not ns.GetItemName(itemID) then
+				missing = missing or {}
+				missing[itemID] = true
+			end
+		end
+	end
+	if missing then
+		FillItemNames(missing)
+	end
 end
 
 local function FormatDetail(row)
 	local status
 	if row.known then
 		status = "|c" .. KNOWN_TEXT_COLOR .. "Known: " .. table.concat(row.knownBy, ", ") .. "|r"
-	elseif row.source then
-		status = "|c" .. UNKNOWN_TEXT_COLOR .. "Not known|r |c" .. GREY_TEXT_COLOR .. "\226\128\148|r " .. FlattenText(row.source)
 	else
-		status = "|c" .. UNKNOWN_TEXT_COLOR .. "Not known|r |c" .. GREY_TEXT_COLOR .. "\226\128\148 source unknown (see Wowhead)|r"
+		status = "|c" .. UNKNOWN_TEXT_COLOR .. "Not known|r"
 	end
 	return "|c" .. GREY_TEXT_COLOR .. row.profession .. "|r  " .. status
 end
@@ -1223,7 +1354,7 @@ local function AcquireRow(index)
 	row = {}
 	-- A Button, so the row gets OnDoubleClick (opens the recipe in the profession window).
 	row.frame = CreateFrame("Button", nil, ui.scrollChild)
-	row.frame:SetSize(LIST_WIDTH, ROW_HEIGHT)
+	row.frame:SetSize(LIST_WIDTH, ROW_TOP_HEIGHT + MATERIALS_MIN_HEIGHT + ROW_BOTTOM_PADDING)
 	row.frame:EnableMouse(true)
 	if row.frame.RegisterForClicks then
 		row.frame:RegisterForClicks("LeftButtonUp")
@@ -1256,17 +1387,26 @@ local function AcquireRow(index)
 	row.detail:SetPoint("RIGHT", row.frame, "RIGHT", -(LINK_BUTTON_WIDTH + 8), 0)
 	row.detail:SetHeight(DETAIL_HEIGHT)
 	row.detail:SetJustifyH("LEFT")
-	row.detail:SetJustifyV("TOP")
+	row.detail:SetJustifyV("MIDDLE")
+	row.detail:SetWordWrap(false)
 
-	-- Shows the Wowhead links of the recipe; the detail text above stops before it.
+	-- The materials of one craft, under the name and the detail line; it wraps and the row grows with it.
+	row.materials = row.frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	row.materials:SetPoint("TOPLEFT", row.frame, "TOPLEFT", 4, -ROW_TOP_HEIGHT)
+	row.materials:SetWidth(MATERIALS_WIDTH)
+	row.materials:SetJustifyH("LEFT")
+	row.materials:SetJustifyV("TOP")
+	row.materials:SetWordWrap(true)
+
+	-- Shows the Wowhead links of the recipe; the detail text beside it stops before it.
 	row.link = CreateFrame("Button", nil, row.frame, "UIPanelButtonTemplate")
 	row.link:SetSize(LINK_BUTTON_WIDTH, LINK_BUTTON_HEIGHT)
-	row.link:SetPoint("BOTTOMRIGHT", row.frame, "BOTTOMRIGHT", -4, 4)
+	row.link:SetPoint("TOPRIGHT", row.frame, "TOPRIGHT", -4, -(ROW_TOP_HEIGHT - LINK_BUTTON_HEIGHT - 2))
 	row.link:SetNormalFontObject("GameFontNormalSmall")
 	row.link:SetText("Wowhead")
 	row.link:SetScript("OnClick", function()
 		if row.entry then
-			ns.ShowWowheadLinks(row.entry.recipeID, row.entry.name)
+			ns.ShowWowheadLinks(row.entry.recipeID, row.entry.name, row.entry.profession)
 		end
 	end)
 
@@ -1282,7 +1422,21 @@ local function AcquireRow(index)
 		elseif GameTooltip.SetSpellByID then
 			pcall(GameTooltip.SetSpellByID, GameTooltip, entry.recipeID)
 		end
-		-- The status line of the row may be cut short, so the tooltip carries the full source and the characters.
+		-- The detail line of the row may be cut short, so the tooltip carries the characters and the whole list of materials.
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine("Materials for one craft:", 1, 1, 1)
+		for _, material in ipairs(entry.materials) do
+			local owned = MaterialOwned(material)
+			local text = FormatMaterial(material) .. " (you have " .. owned .. ")"
+			if owned >= material.quantity then
+				GameTooltip:AddLine(text, 0.25, 1, 0.25, true)
+			elseif owned > 0 then
+				GameTooltip:AddLine(FormatMaterial(material, owned), 1, 0.56, 0.13, true)
+			else
+				GameTooltip:AddLine(text, 1, 0.19, 0.19, true)
+			end
+		end
+		-- Only when the game gave one.
 		if entry.source then
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine("Where to get it:", 1, 0.6, 0.2)
@@ -1319,26 +1473,35 @@ RefreshWindow = function()
 	ui.itemName:SetText(itemName)
 
 	local entries = ns.GetRecipeRows(itemID)
+	RequestMaterialNames(entries)
 	local child = ui.scrollChild
 	child:SetWidth(LIST_WIDTH)
+	local top = 0
+	local owned = {} -- item counts, asked once per refresh
 	for i, entry in ipairs(entries) do
 		local row = AcquireRow(i)
 		row.entry = entry
 		row.frame:ClearAllPoints()
-		row.frame:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
+		row.frame:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -top)
 		row.icon:SetTexture(entry.icon or QUESTION_ICON)
 		row.name:SetText(entry.name)
 		local color = entry.known and KNOWN_NAME_COLOR or UNKNOWN_NAME_COLOR
 		row.name:SetTextColor(color[1], color[2], color[3])
 		row.qty:SetText("x" .. entry.quantity)
 		row.detail:SetText(FormatDetail(entry))
+		row.materials:SetText(FormatMaterials(entry.materials, owned))
+		-- The row is as tall as its materials need, so a long list is never cut off or drawn over the next row.
+		local textHeight = math.max(MATERIALS_MIN_HEIGHT, math.ceil(row.materials:GetStringHeight() or 0))
+		local height = ROW_TOP_HEIGHT + textHeight + ROW_BOTTOM_PADDING
+		row.frame:SetHeight(height)
 		row.frame:Show()
+		top = top + height
 	end
 	for i = #entries + 1, #ui.rows do
 		ui.rows[i].entry = nil
 		ui.rows[i].frame:Hide()
 	end
-	child:SetHeight(math.max(ROW_HEIGHT, #entries * ROW_HEIGHT))
+	child:SetHeight(math.max(ROW_TOP_HEIGHT + MATERIALS_MIN_HEIGHT + ROW_BOTTOM_PADDING, top))
 	ui.emptyText:SetShown(#entries == 0)
 
 	local total, professions = ns.GetRecipeSummary()
@@ -1416,7 +1579,7 @@ local function BuildWindow()
 	ui.scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 36)
 
 	ui.scrollChild = CreateFrame("Frame", nil, ui.scroll)
-	ui.scrollChild:SetSize(LIST_WIDTH, ROW_HEIGHT)
+	ui.scrollChild:SetSize(LIST_WIDTH, ROW_TOP_HEIGHT + MATERIALS_MIN_HEIGHT + ROW_BOTTOM_PADDING)
 	ui.scroll:SetScrollChild(ui.scrollChild)
 	ui.emptyText = ui.scrollChild:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	ui.emptyText:SetPoint("TOPLEFT", ui.scrollChild, "TOPLEFT", 4, -4)
@@ -1424,6 +1587,7 @@ local function BuildWindow()
 	ui.emptyText:SetJustifyH("LEFT")
 	ui.emptyText:SetJustifyV("TOP")
 	ui.emptyText:SetText("No saved recipes use this item. Open your profession windows so Jimmy's Utils can learn their recipes.")
+	ui.emptyText:SetTextColor(1, 0.19, 0.19)
 	ui.emptyText:Hide()
 
 	ui.footer = frame:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
@@ -1488,13 +1652,29 @@ function ns.EncodeUrlText(text)
 	end))
 end
 
--- Page of the recipe (nil without a recipe ID) and a search for its name.
-function ns.GetWowheadUrls(recipeID, name)
-	local pageUrl
-	if IsID(recipeID) then
-		pageUrl = WOWHEAD_BASE .. "spell=" .. string.format("%d", recipeID)
+-- Name of the item that teaches a recipe, "<prefix>: <recipe name>" (for example "Recipe: Minor Healing Potion"), or nil when
+-- the profession is not one with a known prefix.
+function ns.GetRecipeItemName(name, profession)
+	if type(profession) ~= "string" then
+		return nil
 	end
-	return pageUrl, WOWHEAD_BASE .. "search?q=" .. ns.EncodeUrlText(name)
+	local prefix = RECIPE_ITEM_PREFIXES[StripColors(profession):lower()]
+	name = StripColors(name)
+	if not prefix or name == "" then
+		return nil
+	end
+	return prefix .. ": " .. name
+end
+
+-- Page of the recipe's spell (nil without a recipe ID), a search for the item that teaches it (its plain name when the
+-- profession has no known prefix) and whether that search is for the item's name.
+function ns.GetWowheadUrls(recipeID, name, profession)
+	local spellUrl
+	if IsID(recipeID) then
+		spellUrl = WOWHEAD_BASE .. "spell=" .. string.format("%d", recipeID)
+	end
+	local itemName = ns.GetRecipeItemName(name, profession)
+	return spellUrl, WOWHEAD_BASE .. "search?q=" .. ns.EncodeUrlText(itemName or name), itemName ~= nil
 end
 
 local linkPopup, linkUI
@@ -1585,18 +1765,20 @@ local function BuildLinkPopup()
 	linkUI.name:SetJustifyH("LEFT")
 	linkUI.name:SetWordWrap(false)
 
-	linkUI.pageLabel = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	linkUI.pageLabel:SetText("Recipe page")
-	linkUI.pageBox = CreateLinkBox(frame)
+	-- The search comes first (it is the one selected); the spell page of the recipe is below it.
 	linkUI.searchLabel = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	linkUI.searchLabel:SetText("Search")
 	linkUI.searchBox = CreateLinkBox(frame)
+	linkUI.pageLabel = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	linkUI.pageLabel:SetText("Recipe spell")
+	linkUI.pageBox = CreateLinkBox(frame)
 
 	linkUI.hint = frame:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	linkUI.hint:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 12)
-	linkUI.hint:SetHeight(12)
+	linkUI.hint:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 12)
+	linkUI.hint:SetHeight(26)
 	linkUI.hint:SetJustifyH("LEFT")
-	linkUI.hint:SetText("Press Ctrl+C to copy, then paste in your browser.")
+	linkUI.hint:SetJustifyV("BOTTOM")
+	linkUI.hint:SetText("Press Ctrl+C to copy, then paste in your browser.\nRecipes taught by a trainer have no item; use the spell page.")
 
 	frame:SetScript("OnHide", function()
 		linkUI.pageBox:ClearFocus()
@@ -1604,42 +1786,42 @@ local function BuildLinkPopup()
 	end)
 end
 
--- Shows the links of a recipe. Without a usable recipe ID only the search link is shown.
-function ns.ShowWowheadLinks(recipeID, name)
+-- Shows the links of a recipe: a search for the item that teaches it (by the plain recipe name when the profession has no
+-- known prefix) and the page of its spell. Without a usable recipe ID only the search link is shown.
+function ns.ShowWowheadLinks(recipeID, name, profession)
 	BuildLinkPopup()
-	local pageUrl, searchUrl = ns.GetWowheadUrls(recipeID, name)
+	local spellUrl, searchUrl, itemSearch = ns.GetWowheadUrls(recipeID, name, profession)
 	local ui = linkUI
 
 	ui.name:SetText(StripColors(name))
 
-	local searchLabelY, searchBoxY = -48, -62
-	ui.pageBox.url, ui.searchBox.url = pageUrl, searchUrl
-	if pageUrl then
+	ui.pageBox.url, ui.searchBox.url = spellUrl, searchUrl
+	ui.searchLabel:SetText(itemSearch and "Recipe item (search)" or "Search")
+	ui.searchLabel:ClearAllPoints()
+	ui.searchLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -48)
+	ui.searchBox:ClearAllPoints()
+	ui.searchBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, -62)
+	ui.searchBox:SetText(searchUrl)
+	ui.searchBox:SetCursorPosition(0)
+
+	if spellUrl then
 		ui.pageLabel:ClearAllPoints()
-		ui.pageLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -48)
+		ui.pageLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -88)
 		ui.pageBox:ClearAllPoints()
-		ui.pageBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, -62)
-		ui.pageBox:SetText(pageUrl)
+		ui.pageBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, -102)
+		ui.pageBox:SetText(spellUrl)
 		ui.pageBox:SetCursorPosition(0)
 		ui.pageLabel:Show()
 		ui.pageBox:Show()
-		searchLabelY, searchBoxY = -88, -102
 	else
 		ui.pageLabel:Hide()
 		ui.pageBox:Hide()
 	end
-	ui.searchLabel:ClearAllPoints()
-	ui.searchLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, searchLabelY)
-	ui.searchBox:ClearAllPoints()
-	ui.searchBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, searchBoxY)
-	ui.searchBox:SetText(searchUrl)
-	ui.searchBox:SetCursorPosition(0)
 
 	linkPopup:Show()
 	linkPopup:Raise()
-	local first = pageUrl and ui.pageBox or ui.searchBox
-	first:SetFocus()
-	first:HighlightText()
+	ui.searchBox:SetFocus()
+	ui.searchBox:HighlightText()
 	return true
 end
 
@@ -1901,6 +2083,11 @@ function ns.InitRecipes(database)
 			PruneStaleProfessions()
 		elseif event == "ITEM_DATA_LOAD_RESULT" then
 			OnItemDataLoaded((...))
+		elseif event == "BAG_UPDATE_DELAYED" then
+			-- The colors of the materials follow what you have; only the open window needs it.
+			if window and window:IsShown() then
+				RefreshWindow()
+			end
 		end
 	end)
 end

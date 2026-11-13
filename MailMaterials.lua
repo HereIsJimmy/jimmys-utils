@@ -516,6 +516,11 @@ local function Ago(timestamp)
 end
 
 -- The grey line under a character's name: how old what is known of its items is.
+-- Something the addon has no data for: red, so it stands out as something to fix.
+local function NoData(text)
+	return "|cffff3030" .. text .. "|r"
+end
+
 local function FormatGroupInfo(group, accountTime)
 	local parts = {}
 	if group.isOwn then
@@ -524,7 +529,7 @@ local function FormatGroupInfo(group, accountTime)
 			parts[#parts + 1] = "bank " .. Ago(group.bankTime)
 		end
 	else
-		parts[#parts + 1] = group.bagsTime and ("bags " .. Ago(group.bagsTime)) or "bags never seen"
+		parts[#parts + 1] = group.bagsTime and ("bags " .. Ago(group.bagsTime)) or NoData("bags never seen")
 		if group.bankTime then
 			parts[#parts + 1] = "bank " .. Ago(group.bankTime)
 		end
@@ -532,7 +537,7 @@ local function FormatGroupInfo(group, accountTime)
 		if group.mailTime then
 			mail = "mail " .. Ago(group.mailTime)
 		else
-			mail = "mailbox never seen"
+			mail = NoData("mailbox never seen")
 		end
 		if group.mailSentTime and (not group.mailTime or group.mailSentTime > group.mailTime) then
 			mail = mail .. " (items sent " .. Ago(group.mailSentTime) .. ")"
@@ -543,7 +548,7 @@ local function FormatGroupInfo(group, accountTime)
 		parts[#parts + 1] = "account bank " .. Ago(accountTime)
 	end
 	if not group.bankTime then
-		parts[#parts + 1] = "bank never seen " .. DASH .. (group.isOwn and " open your bank to include it" or " open the bank on that character")
+		parts[#parts + 1] = NoData("bank never seen " .. DASH .. (group.isOwn and " open your bank to include it" or " open the bank on that character"))
 	end
 	return table.concat(parts, ", ")
 end
@@ -766,6 +771,12 @@ RefreshWindow = function(data)
 		end
 	end
 	ui.emptyText:SetText(empty or "")
+	-- Missing data (no recipes learned, mailbox never scanned) is something to fix, so it is red; the rest stays grey.
+	if blockIndex == 0 and (data.noRecipes or not snapshot) then
+		ui.emptyText:SetTextColor(1, 0.19, 0.19)
+	else
+		ui.emptyText:SetTextColor(0.5, 0.5, 0.5)
+	end
 	ui.emptyText:SetShown(empty ~= nil)
 end
 

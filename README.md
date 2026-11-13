@@ -17,7 +17,7 @@
 | --- | --- |
 | **Stat weights** | Adds a score line to the tooltip of every equippable item: a weighted sum of its stats, using weights you choose. Multiple profiles, an optional per-stat breakdown (hold Alt by default). |
 | **Range check** | Shows the icon of a spell you pick next to your target's nameplate (or at a fixed spot on screen), tinted red while the target is out of range. |
-| **Recipe lookup** | Hover an item and press a key (or `/ju recipes <item>`) to list the recipes that use it, which of your characters know them, and a Wowhead link for each. Double-click a recipe to open it in your profession window. |
+| **Recipe lookup** | Hover an item and press a key (or `/ju recipes <item>`) to list the recipes that use it with the materials each one needs, which of your characters know them, and Wowhead links (a search for the item that teaches it, and the recipe's spell page) for each. Double-click a recipe to open it in your profession window. |
 | **Recent mail recipients** | A panel next to the Send Mail tab with the last 10 characters you mailed. Click a name to fill in the "To:" box. |
 | **Materials in your mail** | `/ju materials` lists the recipes that use items waiting in your mailbox, with how many of each ingredient (bags, bank and mail) you have, how many you still need, and which recipes are already craftable. It also shows what your other characters on the realm could craft, from their saved bags, bank and mail (including items you mail them), and which need the mail sent first. |
 

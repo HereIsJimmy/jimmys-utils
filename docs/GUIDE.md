@@ -13,7 +13,7 @@ materials, see [Minimap button](#minimap-button)):
 - **Range check** - a small indicator that shows the icon of a spell you pick while your target is within range of it, and
   tints it red while it is not.
 - **Recipe lookup** - point at an item and press a key (or type `/ju recipes <item>`) to list the recipes that use it as an
-  ingredient, which of your characters know each one and, where the client allows it, where to get the recipes nobody knows.
+  ingredient, the materials each one needs and which of your characters know it.
 - **Recent mail recipients** - a small panel docked next to the Send Mail tab of the mailbox that lists the last 10 characters
   you sent mail to; click a name to fill in the "To:" box.
 - **Recipe materials in your mail** - a window that lists the recipes your characters know which use items waiting in your
@@ -138,24 +138,47 @@ To look an item up:
   several items match, up to five are listed in chat with their IDs; use the ID or a longer name.
 
 A window titled "Recipes using <item>" lists every saved recipe that uses the item as a basic ingredient (optional and finishing
-reagents are not saved): the recipe icon and name, its profession, the quantity needed (`x2`), and either `Known: Jamie, Khaz`
-(characters of your current realm are shown without their realm) or `Not known` followed by where the game says to get the
-recipe, or `source unknown` when it did not say. Recipes somebody knows come first, then the rest sorted by profession and name.
-Hovering a row shows the tooltip of the item the recipe makes (or of the recipe itself when it makes no item), followed by the full
-source text and the list of characters that know it. The footer shows how many recipes are saved and from which professions.
+reagents are not saved). Each row has the recipe icon and name, the quantity of the item it needs (`x2`), and a line with its
+profession and either `Known: Jamie, Khaz` (characters of your current realm are shown without their realm) or `Not known`.
+Under it comes the full list of materials for one craft with their quantities, for example `Silverleaf x1, Earthroot x1, Empty
+Vial x1`; an ingredient is green when the character you are playing has enough of it for one craft (bags, bank, reagent bank and account bank together), orange when you have some but not enough (then it shows what you have against what is needed, e.g. `Silverleaf (1/3)`), and red when you have none, and the colors follow your bags while the window is open; the tooltip says how many you have. The list follows the order of the recipe's ingredient slots. A slot
+that accepts several items (for example the quality tiers of an herb) shows the first one followed by `(any quality)`. Recipes
+saved before the slots were kept list their ingredients by name instead. An item name the client has not given yet shows as
+`item:<id>` and is filled in, and the window refreshed, as soon as the client reports it. The row grows to fit a long list, so
+nothing is cut off. Recipes somebody knows come first, then the rest sorted by profession and name. Hovering a row shows the
+tooltip of the item the recipe makes (or of the recipe itself when it makes no item), followed by the materials, the list of
+characters that know it and, only when the game gave one, the "Where to get it" text. The footer shows how many recipes are saved
+and from which professions.
 
 Every row has a small **Wowhead** button. The client cannot open web pages, so it opens a small window titled "Wowhead links" with
-the recipe's name and two boxes to copy from: **Recipe page** (`https://www.wowhead.com/forever/spell=<recipe ID>`) and **Search**
-(`https://www.wowhead.com/forever/search?q=<recipe name>`, with spaces as `+` and other characters percent-encoded). The first box
-is selected: press Ctrl+C and paste into your browser (the window then closes by itself; Escape closes it too). The boxes cannot
-be edited. Without a recipe ID only the search box is shown. The base address is the `WOWHEAD_BASE` constant at the top of
-`Recipes.lua`. Recipes nobody knows and without source text say `source unknown (see Wowhead)`.
+the recipe's name and two boxes to copy from. An addon cannot ask which item teaches a recipe, so the first box, **Recipe item
+(search)**, is a Wowhead search for that item's name, which is the profession's prefix plus the recipe name
+(`https://www.wowhead.com/forever/search?q=Recipe%3A+Minor+Healing+Potion`, with spaces as `+` and other characters
+percent-encoded). The second box, **Recipe spell**, is the page of the recipe's spell
+(`https://www.wowhead.com/forever/spell=<recipe ID>`). Recipes taught by a trainer have no item, so use the spell page for those.
+The prefixes are:
+
+| Profession | Prefix |
+|---|---|
+| Alchemy, Cooking | `Recipe` |
+| Blacksmithing | `Plans` |
+| Leatherworking, Tailoring | `Pattern` |
+| Engineering | `Schematic` |
+| Enchanting | `Formula` |
+| First Aid | `Manual` |
+| Jewelcrafting | `Design` |
+| Inscription | `Technique` |
+
+For any other profession, or a client in another language (profession names are compared in English), the first box searches the
+plain recipe name and is labelled **Search**. The first box is selected: press Ctrl+C and paste into your browser (the window then
+closes by itself; Escape closes it too). The boxes cannot be edited. Without a recipe ID only the search box is shown. The base
+address is the `WOWHEAD_BASE` constant and the prefixes are the `RECIPE_ITEM_PREFIXES` table at the top of `Recipes.lua`.
 
 **Double-click a row** to open that recipe in your profession window (`C_TradeSkillUI.OpenRecipe`, the same call Blizzard's
 recipe tracker uses). This works only for recipes the character you are playing knows; the row's tooltip says
 "Double-click to open it in your profession window." on those. For other recipes a chat line says who knows it.
 
-**Where to get a recipe nobody knows.** That text only exists if the client gives addons recipes the character has not learned.
+**Recipes nobody knows.** They only show up if the client gives addons recipes the character has not learned.
 Forever's own profession window hides them, so it may be that every recipe the addon sees is already known by the character
 that scanned it. Recipes that another character knows always show `Known: <name>`. To find out what your client does, open a
 profession window and type `/ju recipes status`: it shows whether `C_TradeSkillUI.GetAllRecipeIDs` exists and, for the open
@@ -393,7 +416,7 @@ A quick first session:
    the same counts) and what the client gives the addon. If it says nothing is saved, the client did not give the addon a recipe list: see "Recipe data" above and
    report which of `C_TradeSkillUI.GetAllRecipeIDs` / `GetFilteredRecipeIDs` exist. Assign a key under Keybindings > AddOns, hover an
    ingredient in your bags and press it; also try `/ju recipes <item link>` and `/ju recipes <part of a name>`. Check that
-   recipes you have not learned show where to get them (or "source unknown") and that the Known list names your characters.
+   each row lists the materials of one craft with the looked-up item highlighted (the Wowhead popup offers "Recipe item (search)" and "Recipe spell"), and that the Known list names your characters.
 9. Mail: open a mailbox, go to the **Send Mail** tab and send a letter to another character; the panel to the right of the mailbox
    should list that name afterwards (not before the mail went out, and not for a letter that failed, for example with a full
    mailbox). Click the name to fill in the "To:" box (also while a letter is open: check the panel does not cover it), right-click it to remove it, and check `/ju mail off` (the panel disappears, new recipients are not recorded, `/ju materials` says the mail features are off),

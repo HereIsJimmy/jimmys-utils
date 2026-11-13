@@ -1019,7 +1019,9 @@ local function RefreshRecipesPage()
 	local total, professions = ns.GetRecipeSummary()
 	if total == 0 then
 		ui.recipesCounts:SetText("Nothing saved yet. Open a profession window to learn its recipes.")
+		ui.recipesCounts:SetTextColor(1, 0.19, 0.19) -- no data: red
 	else
+		ui.recipesCounts:SetTextColor(1, 1, 1)
 		-- One wrapped line, so any number of professions fits.
 		local parts = {}
 		for _, profession in ipairs(professions) do
