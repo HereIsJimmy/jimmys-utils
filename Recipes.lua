@@ -2119,11 +2119,13 @@ end
 --	when there is no bar; with a bar it starts below it), onChange (called after a click changed the selection) and hidden
 --	(optional: returns the set of professions hidden in the settings, { [lowercase profession] = true }).
 --	The caller drops the entries of hidden professions before it calls Update, so the bar is built from what is left.
---	filter:Update(names) lays the buttons out for the professions named (duplicates allowed) and returns the distance from the
---	top of the window to the list, which the caller sets as the top of its scroll frame (every refresh).
+--	filter:Update(names, hiddenCounts) lays the buttons out for the professions named (duplicates allowed) and returns the
+--	distance from the top of the window to the list, which the caller sets as the top of its scroll frame (every refresh).
+--	hiddenCounts (optional) is { [lowercase profession] = number of that profession's recipes the caller dropped }.
 --	filter:Matches(profession) tells whether a recipe of that profession passes the current selection.
 --	Info line: a small line at the top of the bar's area, shown while the bar is shown or a profession is hidden. Grey, it says
---	that professions can be hidden in the settings; with hidden professions it is orange and names them. The bar and the list
+--	that professions can be hidden in the settings; with hidden professions it is orange and names them, each followed by
+--	" x2" (the recipes dropped) when it had any; those come first. The bar and the list
 --	start below it (filter.infoHeight is its height, 0 when it is not shown).
 local FILTER_BUTTON_HEIGHT = 18
 local FILTER_BUTTON_MIN_WIDTH = 40
@@ -2143,12 +2145,14 @@ local FILTER_INFO_ORANGE = {
 	tonumber(MISSING_TEXT_COLOR:sub(7, 8), 16) / 255,
 }
 
--- "Hidden in the settings: Alchemy, Cooking", or, when the list would be long, "... Alchemy, Cooking and 3 more" (at least one
--- name is always shown). `names` is sorted; `fits(text)` tells whether a text is no wider than the line.
-local function FormatHiddenInfo(names, fits)
+-- "Hidden in the settings: Alchemy x2, Cooking", or, when the list would be long, "... Alchemy x2, Cooking and 3 more" (at least
+-- one label is always shown). `names` holds the labels in the order to show; `fits(text)` tells whether a text is no wider than
+-- the line. The first `keep` labels (the professions with hidden recipes) are never cut: when they alone do not fit, the line
+-- wraps instead.
+local function FormatHiddenInfo(names, fits, keep)
 	local count = #names
 	local text
-	for shown = count, 1, -1 do
+	for shown = count, math.max(1, math.min(keep or 0, count)), -1 do
 		local list = {}
 		for index = 1, shown do
 			list[index] = (names[index]:gsub("|", "||")) -- the text reads escape codes
@@ -2221,7 +2225,7 @@ function ns.CreateProfessionFilter(options)
 		return self.selected == nil or ns.ProfessionKey(profession) == self.selected
 	end
 
-	function filter:Update(names)
+	function filter:Update(names, hiddenCounts)
 		-- One entry per profession, whatever the case: { key = lowercase, label = the saved spelling }
 		local found, list = {}, {}
 		for _, name in ipairs(names) do
@@ -2246,7 +2250,22 @@ function ns.CreateProfessionFilter(options)
 		local hidden = options.hidden and options.hidden() or nil
 		local hiddenNames = hidden and next(hidden) ~= nil and ns.GetHiddenProfessionNames(hidden) or {}
 		if #hiddenNames > 0 then
-			info:SetText(FormatHiddenInfo(hiddenNames, InfoFits))
+			-- Professions with dropped recipes first ("Alchemy x2"), then the others; each group stays sorted by name.
+			local counted, plain = {}, {}
+			local keep
+			for _, name in ipairs(hiddenNames) do
+				local count = hiddenCounts and hiddenCounts[ns.ProfessionKey(name) or ""]
+				if type(count) == "number" and count > 0 then
+					counted[#counted + 1] = name .. " x" .. count
+				else
+					plain[#plain + 1] = name
+				end
+			end
+			keep = #counted
+			for _, name in ipairs(plain) do
+				counted[#counted + 1] = name
+			end
+			info:SetText(FormatHiddenInfo(counted, InfoFits, keep))
 			info:SetTextColor(FILTER_INFO_ORANGE[1], FILTER_INFO_ORANGE[2], FILTER_INFO_ORANGE[3])
 		elseif #list >= 2 then
 			info:SetText(FILTER_INFO_HINT)
@@ -2459,9 +2478,12 @@ RefreshWindow = function()
 	local found = ns.GetRecipeRows(itemID)
 	-- Professions hidden in the settings are dropped first; everything below works on what is left.
 	local hidden = ns.GetHiddenRecipeProfessions()
-	local all = {}
+	local all, hiddenCounts = {}, {} -- hiddenCounts: recipes dropped per hidden profession
 	for _, entry in ipairs(found) do
-		if not hidden[ns.ProfessionKey(entry.profession) or ""] then
+		local key = ns.ProfessionKey(entry.profession) or ""
+		if hidden[key] then
+			hiddenCounts[key] = (hiddenCounts[key] or 0) + 1
+		else
 			all[#all + 1] = entry
 		end
 	end
@@ -2472,7 +2494,7 @@ RefreshWindow = function()
 	for _, entry in ipairs(all) do
 		professions[#professions + 1] = entry.profession
 	end
-	PlaceScroll(ui.filter:Update(professions))
+	PlaceScroll(ui.filter:Update(professions, hiddenCounts))
 	local entries = {}
 	for _, entry in ipairs(all) do
 		if ui.filter:Matches(entry.profession) then

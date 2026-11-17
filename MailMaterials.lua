@@ -736,19 +736,27 @@ RefreshWindow = function(data)
 	local hidden = settings and settings.hiddenProfessions or {}
 	local found, keptCount, kept = 0, 0, {}
 	local professions = {}
+	local hiddenCounts, seenHidden = {}, {} -- distinct recipes dropped per hidden profession (a recipe known by several characters counts once)
 	for characterIndex, character in ipairs(data.characters or {}) do
 		kept[characterIndex] = {}
 		for _, entry in ipairs(character.entries) do
 			found = found + 1
 			local key = ns.ProfessionKey and ns.ProfessionKey(entry.profession)
-			if not (key and hidden[key]) then
+			if key and hidden[key] then
+				local id = entry.recipeID or entry
+				seenHidden[key] = seenHidden[key] or {}
+				if not seenHidden[key][id] then
+					seenHidden[key][id] = true
+					hiddenCounts[key] = (hiddenCounts[key] or 0) + 1
+				end
+			else
 				kept[characterIndex][#kept[characterIndex] + 1] = entry
 				keptCount = keptCount + 1
 				professions[#professions + 1] = entry.profession
 			end
 		end
 	end
-	PlaceScroll(ui.filter:Update(professions))
+	PlaceScroll(ui.filter:Update(professions, hiddenCounts))
 	local groups = {}
 	for characterIndex, character in ipairs(data.characters or {}) do
 		local entries = {}

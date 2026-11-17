@@ -196,7 +196,7 @@ is kept until you close the game and goes back to **All** when its profession is
 profession found in the saved recipes; uncheck one to leave that profession out of this window (checked means shown). The choice is saved for your whole
 account (`recipeLookup.hiddenProfessions`) and an open window follows at once. Hidden professions are dropped before the buttons are built, so the
 buttons only offer what is left. A small line above the buttons says *Professions can be hidden permanently in the settings (/ju).* in grey while the
-buttons are shown, and, in orange, *Hidden in the settings: Alchemy, Cooking* whenever something is hidden (even with no buttons); when hiding leaves
+buttons are shown, and, in orange, *Hidden in the settings: Alchemy x2, Cooking* whenever something is hidden (even with no buttons; *x2* is the number of that profession's recipes left out of this window, and a hidden profession with none is just its name, after the others); when hiding leaves
 no recipe, the window says they are all hidden by the profession settings. The materials window has its own list, on the Mail tab.
 
 **Recipes nobody knows.** They only show up if the client gives addons recipes the character has not learned.
