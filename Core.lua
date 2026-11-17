@@ -16,11 +16,11 @@ local addonName, ns = ...
 		optionsTab = "stats", -- last tab of the options window ("stats" | "range" | "recipes" | "mail")
 		stats = { enabled }, -- show the stat weight score on item tooltips (the profile editing always works)
 		range = { enabled, locked, size, anchor, point, x, y }, -- validated in RangeCheck.lua
-		recipeLookup = { enabled }, -- scan professions and answer the recipe lookup, validated in Recipes.lua
+		recipeLookup = { enabled, hiddenProfessions = { [lowercase profession] = true } }, -- scan professions and answer the recipe lookup; the professions the recipes window leaves out; validated in Recipes.lua
 		recipes, recipeKnownBy, itemNames, recipeSkill, -- saved recipes and the profession skill per character, validated in Recipes.lua
 		mail = { enabled }, -- master switch of the recent recipients and the mail materials, validated in Mail.lua
 		mailRecipients = { [realmKey] = { names } }, -- recent mail recipients, validated in Mail.lua
-		mailMaterials = { position, showOthers }, -- the "materials in your mail" window, validated in MailMaterials.lua
+		mailMaterials = { position, showOthers, hiddenProfessions = { [lowercase profession] = true } }, -- the "materials in your mail" window and the professions it leaves out, validated in MailMaterials.lua
 		inventory = { ["Name-Realm"] = { bags, bagsTime, bank, bankTime, mail } }, -- item snapshots (and the last scan of the mailbox) per character, validated in Inventory.lua
 		accountBank = { items, time }, -- the account bank, validated in Inventory.lua
 		minimap = { hide, angle }, -- the minimap button, validated in Minimap.lua
@@ -97,6 +97,36 @@ function ns.FormatNumber(value, maxDecimals)
 		text = "0"
 	end
 	return text
+end
+
+-- The key a profession goes by in the sets of hidden professions: its name trimmed and lowercased, so spellings of one
+-- profession meet. nil for anything that cannot be a key (not text, empty, longer than 64 bytes). Every save, comparison and
+-- validation of those sets uses it.
+local MAX_PROFESSION_KEY = 64
+function ns.ProfessionKey(name)
+	if type(name) ~= "string" then
+		return nil
+	end
+	local key = Trim(name):lower()
+	if key == "" or #key > MAX_PROFESSION_KEY then
+		return nil
+	end
+	return key
+end
+
+-- A saved set of hidden professions, { [lowercase profession] = true }, cleaned for use: only keys that are professions
+-- (ns.ProfessionKey) with the value true stay, normalized and merged when two spellings meet. Always returns a new table, never nil.
+function ns.CleanProfessionSet(set)
+	local clean = {}
+	if type(set) == "table" then
+		for key, value in pairs(set) do
+			key = value == true and ns.ProfessionKey(key) or nil
+			if key then
+				clean[key] = true
+			end
+		end
+	end
+	return clean
 end
 
 -- The panel templates draw a slightly see-through background; put a solid layer under it so the addon's windows
@@ -492,10 +522,10 @@ local HELP_LINES = {
 	"/ju range unlock | lock - allow dragging the indicator / fix it in place",
 	"/ju range nameplate | screen - show the indicator on the target's nameplate / at a fixed spot on the screen",
 	"/ju range size <12-128> - icon size in pixels",
-	"/ju recipes on | off - turn the recipe lookup (learning recipes from profession windows, the lookup and its key binding) on or off",
+	"/ju recipes on | off - turn the recipe lookup (saving recipes, the lookup and its key binding) on or off",
 	"/ju recipes <item link | item ID | item name> - list the saved recipes that use an item as an ingredient",
 	"/ju recipes - the same for the item you are pointing at (also: the key binding under Options > Keybindings > AddOns)",
-	"/ju recipes status - show what is saved and what the client gives the addon (recipes are learned whenever you open a profession window)",
+	"/ju recipes status - show what is saved and what the client gives the addon",
 	"/ju recipes forget - delete the saved recipes (asks you to repeat it with confirm)",
 	"/ju recipes forget <character> - remove one character (Name or Name-Realm) from the saved recipes, with its saved bags, bank and mail (asks for confirm too)",
 	"/ju mail - show whether the mail features (recent recipients and mail materials) are on; /ju mail on | off - turn them on or off",

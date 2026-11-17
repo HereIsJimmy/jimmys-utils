@@ -17,10 +17,10 @@
 | --- | --- |
 | **Stat weights** | Adds a score line to the tooltip of every equippable item: a weighted sum of its stats, using weights you choose. Multiple profiles, an optional per-stat breakdown (hold Alt by default). |
 | **Range check** | Shows the icon of a spell you pick next to your target's nameplate (or at a fixed spot on screen), tinted red while the target is out of range. |
-| **Recipe lookup** | Hover an item and press a key (or `/ju recipes <item>`) to list the recipes that use it with the materials each one needs, which of your characters know them, and Wowhead links (the exact page of the item that teaches it, and the recipe's spell page) for each. Each recipe shows its **skill-up chance**, `(NN%)`, in the official difficulty colors. Profession buttons above the list filter it to one profession. Double-click a recipe to open it in your profession window. |
+| **Recipe lookup** | Hover an item and press a key (or `/ju recipes <item>`) to list the recipes that use it with the materials each one needs, which of your characters know them, and Wowhead links (the exact page of the item that teaches it, and the recipe's spell page) for each. Each recipe shows its **skill-up chance**, `(NN%)`, in the official difficulty colors. Profession buttons above the list filter it to one profession, and professions can be hidden for good in the Recipes tab of the settings. Double-click a recipe to open it in your profession window. |
 | **Recent mail recipients** | A panel next to the Send Mail tab with the last 10 characters you mailed. Click a name to fill in the "To:" box. |
 | **Mailbox buttons** | A **Take all** button in the open letter that takes every item and the money in one click (never from cash on delivery letters), and a small icon in the mailbox title bar that opens the materials window. |
-| **Materials in your mail** | `/ju materials` lists the recipes that use items waiting in your mailbox, with how many of each ingredient (bags, bank and mail) you have, how many you still need, and which recipes are already craftable. It also shows what your other characters on the realm could craft, from their saved bags, bank and mail (including items you mail them), and which need the mail sent first. Each recipe shows that character's skill-up chance. Profession buttons above the list filter it to one profession. |
+| **Materials in your mail** | `/ju materials` lists the recipes that use items waiting in your mailbox, with how many of each ingredient (bags, bank and mail) you have, how many you still need, and which recipes are already craftable. It also shows what your other characters on the realm could craft, from their saved bags, bank and mail (including items you mail them), and which need the mail sent first. Each recipe shows that character's skill-up chance. Profession buttons above the list filter it to one profession, and professions can be hidden for good in the Mail tab of the settings. |
 
 Every feature can be switched on or off on its own. A minimap button (also listed in the addon compartment) opens the settings
 with a left-click and the mail materials with a right-click.
@@ -45,7 +45,7 @@ Upgrading from **Jimmy's Stat Weights**? Your weights aren't picked up automatic
   turns that feature on or off.
 - **Stat weights:** set your weights on the *Stat Weights* tab, e.g. `/ju set crit 1.5`.
 - **Range check:** pick a spell on the *Range Check* tab or with `/ju range <spell name>`. Enemy nameplates must be shown (V).
-- **Recipe lookup:** open each of your profession windows once so the addon can learn your recipes, then bind a key under
+- **Recipe lookup:** bind a key under
   *Options > Keybindings > AddOns > Jimmy's Utils: Find recipes using hovered item*.
 - **Mail:** the recent recipients panel appears on its own on the Send Mail tab; `/ju materials` opens the materials window.
 
@@ -81,7 +81,7 @@ The complete list, with every option explained, is in the [full guide](docs/GUID
 ## Known limitations
 
 - Addons can't open web pages, so Wowhead links are shown in a box to copy (Ctrl+C) and paste into your browser.
-- The recipe lookup only knows recipes from profession windows you have opened. The skill-up chances and the exact recipe-item links come from a bundled table of the game's data (see below); a chance needs the character's profession skill, which is saved when you log in or open the profession window.
+- The recipe lookup only knows the recipes in the bundled game data (see below) and the ones your profession windows show; a recipe in neither is unknown to it. The skill-up chances and the exact recipe-item links come from the same bundled data; a chance needs the character's profession skill, which is saved when you log in or open the profession window.
 - The skill-up chance is the Classic formula applied to the game's own thresholds, not a number the game reports; where the game's difficulty color disagrees with the table, the chance is shown as `(?)` in the game's color.
 - The game only gives addons the first 50 letters of the inbox, so the materials window can miss items in older mail.
 - The bags, bank and mail of your other characters are only as fresh as their last visit: log in on a character and open its bank (and mailbox) once to save them. The bank can only be read while it is open.
@@ -95,6 +95,6 @@ Found a bug or have an idea? [Open an issue](../../issues) with what you did, wh
 
 Released under the [GNU General Public License v3.0](LICENSE).
 
-The file `Data/RecipeData.lua` is generated from Blizzard's game data (the SkillLineAbility, ItemXItemEffect and ItemEffect tables of the WoW Forever client) as published by [wago.tools](https://wago.tools); the data belongs to Blizzard Entertainment. `python -I tools/gen_recipe_data.py` regenerates it.
+The file `Data/RecipeData.lua` is generated from Blizzard's game data (the SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents and SpellEffect tables of the WoW Forever client: skill-up thresholds, teaching items, skill lines, ingredients and outputs of the recipes) as published by [wago.tools](https://wago.tools); the data belongs to Blizzard Entertainment. `python -I tools/gen_recipe_data.py` regenerates it.
 
 *World of Warcraft is a trademark of Blizzard Entertainment, Inc. This addon is not affiliated with or endorsed by Blizzard.*

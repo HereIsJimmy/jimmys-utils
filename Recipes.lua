@@ -3,8 +3,12 @@ local addonName, ns = ...
 --[[
 	Recipe lookup: lists the recipes that use an item as an ingredient, with the materials each one needs and who knows it.
 
-	The game only lists a profession's recipes while its window is open, so there is no bundled database: whenever one of
-	the player's own profession windows opens (or its list updates) the recipes are read and saved account-wide.
+	The game only lists a profession's recipes while its window is open, so whenever one of the player's own profession windows
+	opens (or its list updates) the recipes are read and saved account-wide. Without a window the character's recipes are learned
+	from the bundled data (Data/RecipeData.lua): at login and when skills or spells change, IsPlayerSpell tells which of the bundled
+	recipes of each of the character's professions it knows (ns.LearnKnownRecipes). That only adds the recipes the character
+	knows (never the unknown ones) and marks or unmarks who knows them; the window scan stays the fallback for recipes the bundle
+	lacks and is richer where both saved a recipe.
 
 	Saved data (validated in ns.InitRecipes, all keys are additive and optional):
 		JimmysStatWeightsDB.recipes = { [recipeID] = { name, icon, profession, output = itemID, reagents = { [itemID] = quantity },
@@ -13,7 +17,7 @@ local addonName, ns = ...
 		JimmysStatWeightsDB.recipeKnownBy = { [recipeID] = { ["Name-Realm"] = true } }
 		JimmysStatWeightsDB.itemNames = { [itemID] = name } -- names of ingredients, so a name can be looked up offline
 		JimmysStatWeightsDB.recipeSkill = { ["Name-Realm"] = { [lowercase profession] = { rank, max, time } } } -- profession skill per character, for the skill-up chance
-		JimmysStatWeightsDB.recipeLookup = { enabled = true } -- off: no recipes are learned and the lookup is closed; what is saved is kept
+		JimmysStatWeightsDB.recipeLookup = { enabled = true, hiddenProfessions = { [lowercase profession] = true } } -- off: no recipes are learned and the lookup is closed; what is saved is kept; hiddenProfessions: professions the recipes window leaves out (Options > Recipes)
 
 	Only basic reagent slots are saved (optional and finishing slots are skipped). The index reagent item -> recipes is kept
 	in memory and rebuilt at load and after every scan. "reagents" is the flat map of every ingredient item (what the index
@@ -22,13 +26,16 @@ local addonName, ns = ...
 	have none until they are scanned again.
 
 	Skill-up chance: Data/RecipeData.lua (generated, see tools/gen_recipe_data.py) has the skill where each recipe turns yellow and
-	grey and the item that teaches it. With the skill each character had the last time its professions were read (recipeSkill) that
+	grey, the item that teaches it, its skill line, ingredients and output. With the skill each character had the last time its professions were read (recipeSkill) that
 	gives the chance of a skill-up (ns.GetSkillUpChance); the difficulty the open profession window reports is kept for the session
 	and only used to cross-check the data.
 
 	Profession filter: when the results hold more than one profession the window shows a button bar (ns.CreateProfessionFilter,
 	also used by the materials window) with "All" and one button per profession; a click lists only that profession's recipes.
 	The selection is kept for the session (not saved) and falls back to "All" when the profession leaves the results.
+	Professions can also be hidden for good (recipeLookup.hiddenProfessions, set in Options > Recipes; the materials window has its
+	own set): their recipes are dropped before the bar is built, so the bar only offers what is left. A line above the buttons
+	says where to hide professions, or (orange) which ones are hidden.
 
 	Every API result is read through pcall and skipped when it is a secret value; nothing is branched on a secret.
 	The profession window's own settings (for example "show unlearned") are never changed.
@@ -57,6 +64,8 @@ local SCAN_DELAY = 0.5 -- seconds; the profession events come in bursts
 local NAME_RETRY_DELAY = 2 -- item names that are not cached yet are asked for again after this long
 local MAX_MATCHES = 5 -- items listed in chat when a name matches several
 local MAX_NOT_READY_RETRIES = 20 -- how often a scan waits for a profession window that is still loading
+local LEARN_DELAY = 1 -- seconds; the spell and skill events come in bursts at login
+local MAX_LEARN_RETRIES = 5 -- how often a spell name is asked for, and how often a pass waits for the spells to load, per session
 
 local WOWHEAD_BASE = "https://www.wowhead.com/forever/"
 local LINK_POPUP_NAME = "JimmysUtilsLinkPopup"
@@ -108,6 +117,7 @@ local SKIP_CHECKS = { "IsTradeSkillLinked", "IsTradeSkillGuild", "IsTradeSkillGu
 local SCAN_EVENTS = {
 	"TRADE_SKILL_SHOW", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED", "NEW_RECIPE_LEARNED", "TRADE_SKILL_CLOSE",
 	"PLAYER_LOGIN", "SKILL_LINES_CHANGED", "ITEM_DATA_LOAD_RESULT", "BAG_UPDATE_DELAYED",
+	"LEARNED_SPELL_IN_SKILL_LINE", "SPELLS_CHANGED", "SPELL_DATA_LOAD_RESULT",
 }
 
 local DEFAULT_LOOKUP = {
@@ -128,6 +138,12 @@ local lastSignature = {} -- ["Name-Realm|profession"] = "recipes|learned" of the
 local pendingNames = {} -- ingredient item IDs whose names the client has not given yet
 local nameRetryPending = false
 local namesRefreshPending = false
+local pendingSpells = {} -- recipe IDs the character knows whose spell names the client has not given yet
+local learnTimer -- the pending learning pass (a trailing debounce)
+local learnToken = 0 -- invalidates timers that were replaced or cancelled
+local spellAttempts = {} -- [recipeID] = how often the spell's name was asked for; kept for the session so a name that never comes is given up on
+local lineAttempts = {} -- [skillLine] = how often a pass found no known recipe at all in it (the spells may not be loaded yet)
+local ScheduleLearn, CancelLearn -- defined with the learning below
 local initialized = false
 local window, ui
 
@@ -325,6 +341,7 @@ local function InitData(database)
 			lookup[name] = default
 		end
 	end
+	lookup.hiddenProfessions = ns.CleanProfessionSet(lookup.hiddenProfessions)
 
 	for recipeID, record in pairs(recipes) do
 		local valid = IsID(recipeID) and type(record) == "table"
@@ -421,6 +438,52 @@ end
 
 local RefreshWindow -- defined with the window below
 
+-- Names of the professions in a set of hidden ones ({ [lowercase profession] = true }), sorted: spelled as the saved recipes
+-- spell them, or (for a profession no saved recipe has) the lowercase key with a capital letter at the start and after each
+-- space (only plain ASCII letters change, so accented words are left alone).
+function ns.GetHiddenProfessionNames(set)
+	local spelled = {}
+	local _, professions = ns.GetRecipeSummary()
+	for _, profession in ipairs(professions) do
+		local key = ns.ProfessionKey(profession.name)
+		if key and not spelled[key] then
+			spelled[key] = Trim(profession.name)
+		end
+	end
+	local names = {}
+	for key in pairs(set or {}) do
+		local capitalized = key:gsub("^%l", string.upper):gsub(" %l", string.upper)
+		names[#names + 1] = spelled[key] or capitalized
+	end
+	table.sort(names, function(a, b)
+		local la, lb = a:lower(), b:lower()
+		if la ~= lb then
+			return la < lb
+		end
+		return a < b
+	end)
+	return names
+end
+
+-- The saved set of professions the recipes window leaves out: { [lowercase profession] = true } (the live table).
+function ns.GetHiddenRecipeProfessions()
+	return lookup and lookup.hiddenProfessions or {}
+end
+
+-- Hides or shows a profession in the recipes window and refreshes the window when it is open. Returns false for a name that
+-- is not usable or before the data is loaded.
+function ns.SetRecipeProfessionHidden(profession, hidden)
+	local key = ns.ProfessionKey(profession)
+	if not lookup or not key then
+		return false
+	end
+	lookup.hiddenProfessions[key] = hidden and true or nil
+	if window and window:IsShown() then
+		RefreshWindow()
+	end
+	return true
+end
+
 -- Tells the open windows that the saved recipes changed.
 local function NotifyChanged()
 	if window and window:IsShown() then
@@ -446,7 +509,11 @@ function ns.ForgetRecipes()
 	Wipe(skills)
 	Wipe(liveDifficulty)
 	Wipe(pendingNames)
+	Wipe(pendingSpells)
+	Wipe(spellAttempts)
+	Wipe(lineAttempts)
 	Wipe(lastSignature)
+	CancelLearn()
 	BuildIndex()
 	NotifyChanged()
 	return count
@@ -792,7 +859,11 @@ local function ScanRecipe(recipeID, info, baseProfession, character, usedItems)
 	if (not reagents or next(reagents) == nil) and existing then
 		reagents = existing.reagents
 		slots = existing.slots
-		output = output or existing.output
+	end
+	-- A window that gives no output keeps the saved one, else the bundled one.
+	if not output then
+		local bundled = ns.RecipeOutputs and ns.RecipeOutputs[recipeID]
+		output = existing and existing.output or (IsID(bundled) and bundled or nil)
 	end
 	if slots and #slots == 0 then
 		slots = nil
@@ -948,8 +1019,8 @@ function ns.ScanRecipes(skipUnchanged)
 	return true, read
 end
 
--- The professions the character has, as a list of { name, rank, max } (rank and max are nil when the client does not say);
--- nil unless the list can be read reliably.
+-- The professions the character has, as a list of { name, rank, max, skillLine } (the others are nil when the client does not
+-- say); nil unless the list can be read reliably.
 local function ReadOwnProfessions()
 	if not (GetProfessions and GetProfessionInfo) then
 		return nil
@@ -965,12 +1036,13 @@ local function ReadOwnProfessions()
 			if IsSecret(index) or type(index) ~= "number" then
 				return nil
 			end
-			local ok, name, _, rank, max = pcall(GetProfessionInfo, index)
+			local ok, name, _, rank, max, _, _, skillLine = pcall(GetProfessionInfo, index)
 			name = ok and PlainString(name) or nil
 			if not name then
 				return nil
 			end
-			list[#list + 1] = { name = name, rank = IsSkillValue(rank) and rank or nil, max = IsSkillValue(max) and max or nil }
+			list[#list + 1] = { name = name, rank = IsSkillValue(rank) and rank or nil, max = IsSkillValue(max) and max or nil,
+				skillLine = IsID(skillLine) and skillLine or nil }
 		end
 	end
 	-- No professions at all is more likely a list that has not loaded yet than a character without any.
@@ -980,24 +1052,63 @@ local function ReadOwnProfessions()
 	return list
 end
 
+-- The profession skill lines of a bundled recipe (ns.RecipeSkillLines gives one ID, or a list for the few recipes in several), as a
+-- list; nil for a recipe the bundle does not have.
+local function GetRecipeLines(recipeID)
+	local value = ns.RecipeSkillLines and ns.RecipeSkillLines[recipeID]
+	if IsID(value) then
+		return { value }
+	end
+	value = PlainTable(value)
+	if value then
+		local lines = {}
+		for _, line in ipairs(value) do
+			if IsID(line) then
+				lines[#lines + 1] = line
+			end
+		end
+		if #lines > 0 then
+			return lines
+		end
+	end
+end
+
 -- Takes this character off the recipes and the skills of professions it no longer has, and saves the skill it has in the ones
--- it does.
+-- it does. A bundled recipe is the character's while it has any of the recipe's skill lines (when the client gave the skill line of
+-- every profession); any other recipe is told by the profession name it was saved under.
 local function SyncOwnProfessions()
 	local character = db and GetCharacterKey()
 	local list = character and ReadOwnProfessions()
 	if not list then
 		return
 	end
-	local names = {}
+	local names, ownedLines, linesKnown = {}, {}, true
 	for _, profession in ipairs(list) do
 		names[profession.name:lower()] = true
+		if profession.skillLine then
+			ownedLines[profession.skillLine] = true
+		else
+			linesKnown = false
+		end
 	end
 	local changed = false
 	for recipeID, characters in pairs(knownBy) do
 		local record = recipes[recipeID]
-		if characters[character] and record and not names[record.profession:lower()] then
-			SetKnown(recipeID, character, false)
-			changed = true
+		if characters[character] and record then
+			local lines = linesKnown and GetRecipeLines(recipeID)
+			local owned
+			if lines then
+				owned = false
+				for _, line in ipairs(lines) do
+					owned = owned or ownedLines[line] == true
+				end
+			else
+				owned = names[record.profession:lower()] == true
+			end
+			if not owned then
+				SetKnown(recipeID, character, false)
+				changed = true
+			end
 		end
 	end
 	local saved = skills[character]
@@ -1024,6 +1135,295 @@ local function SyncOwnProfessions()
 	if changed or skillChanged then
 		NotifyChanged()
 	end
+end
+
+--------------------------------------------------------------------------------
+-- Learning the recipes without opening the profession windows
+--------------------------------------------------------------------------------
+
+-- The bundled recipes of a profession skill line (a sorted list of recipe IDs, nil for a line without any). The index is built
+-- from ns.RecipeSkillLines the first time it is needed.
+local bundleSource, bundleLines
+local function GetBundledRecipes(skillLine)
+	local source = ns.RecipeSkillLines
+	if type(source) ~= "table" then
+		return nil
+	end
+	if bundleSource ~= source then
+		bundleSource, bundleLines = source, {}
+		for recipeID in pairs(source) do
+			for _, line in ipairs(IsID(recipeID) and GetRecipeLines(recipeID) or {}) do
+				local list = bundleLines[line]
+				if not list then
+					list = {}
+					bundleLines[line] = list
+				end
+				list[#list + 1] = recipeID
+			end
+		end
+		for _, list in pairs(bundleLines) do
+			table.sort(list)
+		end
+	end
+	return bundleLines[skillLine]
+end
+
+-- true or false when the character knows the recipe's spell or not, nil when the client does not give a plain boolean.
+local function IsRecipeKnown(recipeID)
+	local ok, result = pcall(IsPlayerSpell, recipeID)
+	if ok and not IsSecret(result) and type(result) == "boolean" then
+		return result
+	end
+	return nil
+end
+
+local function ReadSpellName(recipeID)
+	if C_Spell and C_Spell.GetSpellName then
+		local ok, value = pcall(C_Spell.GetSpellName, recipeID)
+		local name = ok and PlainString(value) or nil
+		if name then
+			return name
+		end
+	end
+	if C_Spell and C_Spell.GetSpellInfo then
+		local ok, info = pcall(C_Spell.GetSpellInfo, recipeID)
+		info = ok and PlainTable(info) or nil
+		local name = info and PlainString(info.name) or nil
+		if name then
+			return name
+		end
+	end
+	if GetSpellInfo then
+		local ok, value = pcall(GetSpellInfo, recipeID)
+		return ok and PlainString(value) or nil
+	end
+end
+
+local function ReadSpellIcon(recipeID)
+	if C_Spell and C_Spell.GetSpellTexture then
+		local ok, value = pcall(C_Spell.GetSpellTexture, recipeID)
+		if ok and not IsSecret(value) and (type(value) == "number" or type(value) == "string") then
+			return value
+		end
+	end
+end
+
+-- { [itemID] = quantity } and the slots (one single-item slot per ingredient) of a bundled recipe, or nil without usable data.
+local function GetBundledReagents(recipeID)
+	local flat = ns.RecipeReagents and ns.RecipeReagents[recipeID]
+	if type(flat) ~= "table" then
+		return nil
+	end
+	local reagents, slots = {}, {}
+	for position = 1, #flat, 2 do
+		local itemID, quantity = flat[position], flat[position + 1]
+		if not (IsID(itemID) and IsID(quantity)) or reagents[itemID] then
+			return nil
+		end
+		reagents[itemID] = quantity
+		slots[#slots + 1] = { items = { itemID }, quantity = quantity }
+	end
+	if #slots == 0 then
+		return nil
+	end
+	return reagents, slots
+end
+
+local function GetBundledOutput(recipeID)
+	local output = ns.RecipeOutputs and ns.RecipeOutputs[recipeID]
+	if IsID(output) then
+		return output
+	end
+end
+
+local function SameReagents(a, b)
+	for itemID, quantity in pairs(a) do
+		if b[itemID] ~= quantity then
+			return false
+		end
+	end
+	for itemID in pairs(b) do
+		if not a[itemID] then
+			return false
+		end
+	end
+	return true
+end
+
+-- A saved recipe made from the bundled data for a recipe the character knows. Returns the record, or nil and why: "name" when the
+-- client has no name for the spell yet (it is asked for), "data" when the bundle has no ingredients for it.
+local function CreateBundledRecord(recipeID, profession)
+	local reagents, slots = GetBundledReagents(recipeID)
+	if not reagents then
+		return nil, "data"
+	end
+	local name = ReadSpellName(recipeID)
+	if not name then
+		return nil, "name"
+	end
+	local output = GetBundledOutput(recipeID)
+	return {
+		name = name,
+		icon = (output and ReadItemIcon(output)) or ReadSpellIcon(recipeID),
+		profession = profession,
+		output = output,
+		reagents = reagents,
+		slots = slots,
+	}
+end
+
+-- Fills what a saved recipe is missing from the bundled data (a record from a profession window is richer and stays as it is).
+-- Returns true when something was added.
+local function FillFromBundle(recipeID, record)
+	local changed = false
+	if not record.output then
+		record.output = GetBundledOutput(recipeID)
+		changed = record.output ~= nil
+	end
+	if not record.icon then
+		record.icon = (record.output and ReadItemIcon(record.output)) or ReadSpellIcon(recipeID)
+		changed = changed or record.icon ~= nil
+	end
+	if not record.slots then
+		local reagents, slots = GetBundledReagents(recipeID)
+		if reagents and SameReagents(reagents, record.reagents) then
+			record.slots = slots
+			changed = true
+		end
+	end
+	return changed
+end
+
+-- Learns which recipes the character knows from the bundled data (ns.RecipeSkillLines, ns.RecipeReagents, ns.RecipeOutputs): for
+-- each of its professions, IsPlayerSpell tells which of that skill line's recipes it knows, outside any profession window. A known
+-- recipe is marked as known (and saved from the bundle when no profession window saved it); a saved recipe of that skill line the
+-- character does not know is unmarked (unless no recipe of the line at all is known, which looks like spells that are not loaded yet:
+-- then nothing in that line is unmarked and the pass is repeated a few times). Unknown recipes are never saved. Recipes the bundle
+-- does not have are left to the window scan. Returns true when something changed.
+function ns.LearnKnownRecipes()
+	if not (db and IsPlayerSpell and ns.IsRecipeLookupEnabled()) then
+		return false
+	end
+	local character = GetCharacterKey()
+	local list = character and ReadOwnProfessions()
+	if not list then
+		return false
+	end
+
+	local changed, added, waiting, usedItems = false, false, false, {}
+	Wipe(pendingSpells)
+	for _, profession in ipairs(list) do
+		local line = profession.skillLine
+		local bundled = line and GetBundledRecipes(line)
+		local answers, trusted = {}, true
+		for _, recipeID in ipairs(bundled or {}) do
+			answers[recipeID] = IsRecipeKnown(recipeID)
+		end
+		if bundled then
+			local anyKnown = false
+			for _, recipeID in ipairs(bundled) do
+				anyKnown = anyKnown or answers[recipeID] == true
+			end
+			if anyKnown then
+				lineAttempts[line] = nil
+			else
+				local attempts = lineAttempts[line] or 0
+				if attempts < MAX_LEARN_RETRIES then
+					lineAttempts[line] = attempts + 1
+					trusted, waiting = false, true
+				end
+			end
+		end
+		for _, recipeID in ipairs(bundled or {}) do
+			local known = answers[recipeID]
+			if known == true then
+				local record = recipes[recipeID]
+				if record then
+					changed = FillFromBundle(recipeID, record) or changed
+				else
+					local why
+					record, why = CreateBundledRecord(recipeID, profession.name)
+					if record then
+						recipes[recipeID] = record
+						for itemID in pairs(record.reagents) do
+							usedItems[itemID] = true
+						end
+						added, changed = true, true
+					elseif why == "name" then
+						-- Ask for the name (a few times per session at most), and come back when it is there.
+						local attempts = spellAttempts[recipeID] or 0
+						if attempts < MAX_LEARN_RETRIES then
+							spellAttempts[recipeID] = attempts + 1
+							if C_Spell and C_Spell.RequestLoadSpellData then
+								pcall(C_Spell.RequestLoadSpellData, recipeID)
+							end
+							pendingSpells[recipeID] = true
+							waiting = true
+						end
+					end
+					if record then
+						spellAttempts[recipeID] = nil
+					end
+				end
+				local characters = knownBy[recipeID]
+				if record and not (characters and characters[character]) then
+					SetKnown(recipeID, character, true)
+					changed = true
+				end
+			elseif known == false and trusted then
+				local characters = knownBy[recipeID]
+				if characters and characters[character] then
+					SetKnown(recipeID, character, false)
+					changed = true
+				end
+			end
+		end
+	end
+
+	if added then
+		BuildIndex()
+		FillItemNames(usedItems)
+	end
+	if changed then
+		NotifyChanged()
+	end
+	-- Names or spells the client has not loaded yet: SPELL_DATA_LOAD_RESULT brings the pass back, and so does a timer. Both are
+	-- bounded by the attempt counters, which events do not reset.
+	if waiting then
+		ScheduleLearn(NAME_RETRY_DELAY)
+	end
+	return changed
+end
+
+-- The pass runs a moment after the last event that may have changed what the character knows (a trailing debounce).
+ScheduleLearn = function(delay)
+	if learnTimer and learnTimer.Cancel then
+		pcall(learnTimer.Cancel, learnTimer)
+	end
+	learnTimer = nil
+	learnToken = learnToken + 1
+	local token = learnToken
+	local function Fire()
+		if token == learnToken then
+			learnTimer = nil
+			ns.LearnKnownRecipes()
+		end
+	end
+	if C_Timer and C_Timer.NewTimer then
+		learnTimer = C_Timer.NewTimer(delay or LEARN_DELAY, Fire)
+	elseif C_Timer and C_Timer.After then
+		C_Timer.After(delay or LEARN_DELAY, Fire)
+	else
+		ns.LearnKnownRecipes()
+	end
+end
+
+CancelLearn = function()
+	if learnTimer and learnTimer.Cancel then
+		pcall(learnTimer.Cancel, learnTimer)
+	end
+	learnTimer = nil
+	learnToken = learnToken + 1 -- a timer that cannot be cancelled does nothing when it fires
 end
 
 -- The scan runs a moment after the last profession event (a trailing debounce). Events that mean something changed
@@ -1716,16 +2116,50 @@ end
 -- only; a profession that is gone from the results falls back to "All". Professions are compared without regard to case and
 -- labeled with the first spelling seen.
 --	options: parent (the window), left and top (where the bar starts), width (room for a row), listTop (where the list starts
---	when there is no bar; with a bar it starts below it) and onChange (called after a click changed the selection).
+--	when there is no bar; with a bar it starts below it), onChange (called after a click changed the selection) and hidden
+--	(optional: returns the set of professions hidden in the settings, { [lowercase profession] = true }).
+--	The caller drops the entries of hidden professions before it calls Update, so the bar is built from what is left.
 --	filter:Update(names) lays the buttons out for the professions named (duplicates allowed) and returns the distance from the
 --	top of the window to the list, which the caller sets as the top of its scroll frame (every refresh).
 --	filter:Matches(profession) tells whether a recipe of that profession passes the current selection.
+--	Info line: a small line at the top of the bar's area, shown while the bar is shown or a profession is hidden. Grey, it says
+--	that professions can be hidden in the settings; with hidden professions it is orange and names them. The bar and the list
+--	start below it (filter.infoHeight is its height, 0 when it is not shown).
 local FILTER_BUTTON_HEIGHT = 18
 local FILTER_BUTTON_MIN_WIDTH = 40
 local FILTER_BUTTON_PADDING = 16 -- added to the text width
 local FILTER_GAP_X = 4
 local FILTER_GAP_Y = 2
 local FILTER_LIST_GAP = 4 -- between the last row of buttons and the list
+local FILTER_INFO_MIN_HEIGHT = 12 -- one line of the small font
+local FILTER_INFO_GAP = 2 -- between the info line and the bar
+local FILTER_INFO_HINT = "Professions can be hidden permanently in the settings (/ju)."
+local FILTER_INFO_HIDDEN = "Hidden in the settings: "
+local FILTER_INFO_GREY = { 0.5, 0.5, 0.5 }
+-- The orange of MISSING_TEXT_COLOR as red, green and blue fractions.
+local FILTER_INFO_ORANGE = {
+	tonumber(MISSING_TEXT_COLOR:sub(3, 4), 16) / 255,
+	tonumber(MISSING_TEXT_COLOR:sub(5, 6), 16) / 255,
+	tonumber(MISSING_TEXT_COLOR:sub(7, 8), 16) / 255,
+}
+
+-- "Hidden in the settings: Alchemy, Cooking", or, when the list would be long, "... Alchemy, Cooking and 3 more" (at least one
+-- name is always shown). `names` is sorted; `fits(text)` tells whether a text is no wider than the line.
+local function FormatHiddenInfo(names, fits)
+	local count = #names
+	local text
+	for shown = count, 1, -1 do
+		local list = {}
+		for index = 1, shown do
+			list[index] = (names[index]:gsub("|", "||")) -- the text reads escape codes
+		end
+		text = FILTER_INFO_HIDDEN .. table.concat(list, ", ") .. (shown < count and (" and " .. (count - shown) .. " more") or "")
+		if fits(text) then
+			break
+		end
+	end
+	return text
+end
 
 function ns.CreateProfessionFilter(options)
 	local filter = { selected = nil, height = 0, buttons = {} }
@@ -1733,6 +2167,25 @@ function ns.CreateProfessionFilter(options)
 	-- Text is measured on a font string of the buttons' font; a button's own text may not be sized yet.
 	local measure = parent:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 	measure:Hide()
+
+	-- The info line above the bar. No fixed height: it is as tall as its wrapped text (one line when the wording fits).
+	local info = parent:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	info:SetPoint("TOPLEFT", parent, "TOPLEFT", options.left, -options.top)
+	info:SetWidth(options.width)
+	info:SetJustifyH("LEFT")
+	info:SetJustifyV("TOP")
+	info:SetWordWrap(true)
+	info:Hide()
+	filter.info = info
+	filter.infoHeight = 0
+	-- The width of a candidate text is measured on a hidden font string of the same font, against the width of the line.
+	local infoMeasure = parent:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	infoMeasure:Hide()
+	local function InfoFits(text)
+		infoMeasure:SetText(text)
+		local width = infoMeasure:GetStringWidth()
+		return type(width) ~= "number" or width <= options.width
+	end
 
 	local function AcquireButton(index)
 		local button = filter.buttons[index]
@@ -1765,19 +2218,17 @@ function ns.CreateProfessionFilter(options)
 	end
 
 	function filter:Matches(profession)
-		return self.selected == nil or (type(profession) == "string" and profession:lower() == self.selected)
+		return self.selected == nil or ns.ProfessionKey(profession) == self.selected
 	end
 
 	function filter:Update(names)
 		-- One entry per profession, whatever the case: { key = lowercase, label = the saved spelling }
 		local found, list = {}, {}
 		for _, name in ipairs(names) do
-			if type(name) == "string" and name ~= "" then
-				local key = name:lower()
-				if not found[key] then
-					found[key] = true
-					list[#list + 1] = { key = key, label = name }
-				end
+			local key = ns.ProfessionKey(name)
+			if key and not found[key] then
+				found[key] = true
+				list[#list + 1] = { key = key, label = Trim(name) }
 			end
 		end
 		table.sort(list, function(a, b)
@@ -1791,10 +2242,34 @@ function ns.CreateProfessionFilter(options)
 			self.selected = nil
 		end
 
+		-- The info line: orange with the hidden professions, else grey while the bar is shown, else not at all.
+		local hidden = options.hidden and options.hidden() or nil
+		local hiddenNames = hidden and next(hidden) ~= nil and ns.GetHiddenProfessionNames(hidden) or {}
+		if #hiddenNames > 0 then
+			info:SetText(FormatHiddenInfo(hiddenNames, InfoFits))
+			info:SetTextColor(FILTER_INFO_ORANGE[1], FILTER_INFO_ORANGE[2], FILTER_INFO_ORANGE[3])
+		elseif #list >= 2 then
+			info:SetText(FILTER_INFO_HINT)
+			info:SetTextColor(FILTER_INFO_GREY[1], FILTER_INFO_GREY[2], FILTER_INFO_GREY[3])
+		end
+		local barTop = options.top
+		if #hiddenNames > 0 or #list >= 2 then
+			local textHeight = info:GetStringHeight()
+			self.infoHeight = math.max(FILTER_INFO_MIN_HEIGHT, math.ceil(type(textHeight) == "number" and textHeight or 0))
+			info:Show()
+			barTop = options.top + self.infoHeight + FILTER_INFO_GAP
+		else
+			self.infoHeight = 0
+			info:Hide()
+		end
+
 		if #list < 2 then
 			self.height = 0
 			for _, button in ipairs(self.buttons) do
 				button:Hide()
+			end
+			if self.infoHeight > 0 then
+				return options.top + self.infoHeight + FILTER_LIST_GAP
 			end
 			return options.listTop
 		end
@@ -1814,7 +2289,7 @@ function ns.CreateProfessionFilter(options)
 				row = row + 1
 			end
 			button:ClearAllPoints()
-			button:SetPoint("TOPLEFT", parent, "TOPLEFT", options.left + x, -(options.top + row * (FILTER_BUTTON_HEIGHT + FILTER_GAP_Y)))
+			button:SetPoint("TOPLEFT", parent, "TOPLEFT", options.left + x, -(barTop + row * (FILTER_BUTTON_HEIGHT + FILTER_GAP_Y)))
 			x = x + width + FILTER_GAP_X
 			if item.key == self.selected then
 				button:LockHighlight()
@@ -1827,7 +2302,7 @@ function ns.CreateProfessionFilter(options)
 			self.buttons[index]:Hide()
 		end
 		self.height = (row + 1) * FILTER_BUTTON_HEIGHT + row * FILTER_GAP_Y
-		return options.top + self.height + FILTER_LIST_GAP
+		return barTop + self.height + FILTER_LIST_GAP
 	end
 
 	return filter
@@ -1960,6 +2435,9 @@ local function AcquireRow(index)
 	return row
 end
 
+local EMPTY_TEXT = "No saved recipes use this item."
+local EMPTY_HIDDEN_TEXT = "The recipes that use this item are all hidden by the profession settings (/ju)."
+
 -- Puts the top of the list `top` below the top of the window (it moves down with the filter bar).
 local function PlaceScroll(top)
 	ui.scroll:ClearAllPoints()
@@ -1978,9 +2456,18 @@ RefreshWindow = function()
 	ui.itemIcon:SetTexture(ReadItemIcon(itemID) or QUESTION_ICON)
 	ui.itemName:SetText(itemName)
 
-	local all = ns.GetRecipeRows(itemID)
+	local found = ns.GetRecipeRows(itemID)
+	-- Professions hidden in the settings are dropped first; everything below works on what is left.
+	local hidden = ns.GetHiddenRecipeProfessions()
+	local all = {}
+	for _, entry in ipairs(found) do
+		if not hidden[ns.ProfessionKey(entry.profession) or ""] then
+			all[#all + 1] = entry
+		end
+	end
 	RequestMaterialNames(all)
-	-- The filter bar offers the professions of every result; the list shows the selected one. The list moves down with the bar.
+	-- The filter bar offers the professions of every result left; the list shows the selected one. The list moves down with
+	-- the info line and the bar.
 	local professions = {}
 	for _, entry in ipairs(all) do
 		professions[#professions + 1] = entry.profession
@@ -2021,6 +2508,14 @@ RefreshWindow = function()
 		ui.rows[i].frame:Hide()
 	end
 	child:SetHeight(math.max(ROW_TOP_HEIGHT + MATERIALS_MIN_HEIGHT + ROW_BOTTOM_PADDING, top))
+	-- Nothing left because of the hidden professions is not a missing-data problem: another text, grey like other notices.
+	if #entries == 0 and #found > 0 and #all == 0 then
+		ui.emptyText:SetText(EMPTY_HIDDEN_TEXT)
+		ui.emptyText:SetTextColor(0.5, 0.5, 0.5)
+	else
+		ui.emptyText:SetText(EMPTY_TEXT)
+		ui.emptyText:SetTextColor(1, 0.19, 0.19)
+	end
 	ui.emptyText:SetShown(#entries == 0)
 
 	local total, professions = ns.GetRecipeSummary()
@@ -2099,6 +2594,7 @@ local function BuildWindow()
 	-- Filter bar between the header and the list; it only shows when the results hold more than one profession.
 	ui.filter = ns.CreateProfessionFilter({
 		parent = frame, left = 16, top = FILTER_TOP, width = FRAME_WIDTH - 32, listTop = LIST_TOP,
+		hidden = ns.GetHiddenRecipeProfessions,
 		onChange = function()
 			ui.scroll:SetVerticalScroll(0)
 			RefreshWindow()
@@ -2113,7 +2609,7 @@ local function BuildWindow()
 	ui.emptyText:SetWidth(LIST_WIDTH - 12)
 	ui.emptyText:SetJustifyH("LEFT")
 	ui.emptyText:SetJustifyV("TOP")
-	ui.emptyText:SetText("No saved recipes use this item. Open your profession windows so Jimmy's Utils can learn their recipes.")
+	ui.emptyText:SetText(EMPTY_TEXT)
 	ui.emptyText:SetTextColor(1, 0.19, 0.19)
 	ui.emptyText:Hide()
 
@@ -2196,7 +2692,8 @@ end
 
 -- Page of the recipe's spell (nil without a recipe ID), the page of the item that teaches it when the bundled data knows it
 -- (Data/RecipeData.lua) or else a search for that item (its plain name when the profession has no known prefix), whether that
--- is a search for the item's name, and the ID of the teaching item (nil when it is not known).
+-- is a search for the item's name, and the ID of the teaching item (nil when it is not known). A recipe the bundled data knows
+-- without a teaching item is taught by a trainer: there is no item to search for, so the second URL is nil.
 function ns.GetWowheadUrls(recipeID, name, profession)
 	local spellUrl
 	if IsID(recipeID) then
@@ -2205,6 +2702,9 @@ function ns.GetWowheadUrls(recipeID, name, profession)
 	local teacher = IsID(recipeID) and ns.RecipeTeachers and ns.RecipeTeachers[recipeID] or nil
 	if IsID(teacher) then
 		return spellUrl, WOWHEAD_BASE .. "item=" .. string.format("%d", teacher), false, teacher
+	end
+	if IsID(recipeID) and ns.RecipeThresholds and ns.RecipeThresholds[recipeID] then
+		return spellUrl, nil, false, nil
 	end
 	local itemName = ns.GetRecipeItemName(name, profession)
 	return spellUrl, WOWHEAD_BASE .. "search?q=" .. ns.EncodeUrlText(itemName or name), itemName ~= nil
@@ -2329,19 +2829,32 @@ function ns.ShowWowheadLinks(recipeID, name, profession)
 	ui.name:SetText(StripColors(name))
 
 	ui.pageBox.url, ui.searchBox.url = spellUrl, searchUrl
-	ui.searchLabel:SetText(teacher and "Recipe item" or (itemSearch and "Recipe item (search)" or "Search"))
-	ui.searchLabel:ClearAllPoints()
-	ui.searchLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -48)
-	ui.searchBox:ClearAllPoints()
-	ui.searchBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, -62)
-	ui.searchBox:SetText(searchUrl)
-	ui.searchBox:SetCursorPosition(0)
+	-- Trainer recipes have no item: only the spell page is shown, in the first place, and the popup is shorter.
+	local pageTop = -88
+	if searchUrl then
+		ui.searchLabel:SetText(teacher and "Recipe item" or (itemSearch and "Recipe item (search)" or "Search"))
+		ui.searchLabel:ClearAllPoints()
+		ui.searchLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -48)
+		ui.searchBox:ClearAllPoints()
+		ui.searchBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, -62)
+		ui.searchBox:SetText(searchUrl)
+		ui.searchBox:SetCursorPosition(0)
+		ui.searchLabel:Show()
+		ui.searchBox:Show()
+		linkPopup:SetHeight(LINK_POPUP_HEIGHT)
+	else
+		ui.searchBox:ClearFocus()
+		ui.searchLabel:Hide()
+		ui.searchBox:Hide()
+		pageTop = -48
+		linkPopup:SetHeight(LINK_POPUP_HEIGHT - 40)
+	end
 
 	if spellUrl then
 		ui.pageLabel:ClearAllPoints()
-		ui.pageLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -88)
+		ui.pageLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, pageTop)
 		ui.pageBox:ClearAllPoints()
-		ui.pageBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, -102)
+		ui.pageBox:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 20, pageTop - 14)
 		ui.pageBox:SetText(spellUrl)
 		ui.pageBox:SetCursorPosition(0)
 		ui.pageLabel:Show()
@@ -2353,8 +2866,9 @@ function ns.ShowWowheadLinks(recipeID, name, profession)
 
 	linkPopup:Show()
 	linkPopup:Raise()
-	ui.searchBox:SetFocus()
-	ui.searchBox:HighlightText()
+	local focus = searchUrl and ui.searchBox or ui.pageBox
+	focus:SetFocus()
+	focus:HighlightText()
 	return true
 end
 
@@ -2373,8 +2887,11 @@ function ns.SetRecipeLookupEnabled(enabled)
 		return false
 	end
 	lookup.enabled = enabled
-	if not enabled then
+	if enabled then
+		ScheduleLearn()
+	else
 		CancelScan()
+		CancelLearn()
 		Wipe(lastSignature)
 		if window then
 			window:Hide()
@@ -2470,7 +2987,7 @@ end
 local function PrintSaved()
 	local total, professions = ns.GetRecipeSummary()
 	if total == 0 then
-		ns.Print("No recipes saved yet. Open your profession windows so Jimmy's Utils can learn their recipes.")
+		ns.Print("No recipes saved yet.")
 	else
 		ns.Print(string.format("%d recipe%s saved:", total, total == 1 and "" or "s"))
 		for _, profession in ipairs(professions) do
@@ -2501,6 +3018,7 @@ local function PrintSaved()
 end
 
 local forgetHint = "/ju recipes forget confirm"
+local RELEARN_NOTE = " This is the character you are playing, so the recipes it knows will be saved again automatically."
 
 -- Two-step removal of one character from the saved recipes: "forget <character>", then "forget <character> confirm".
 local function HandleForgetCharacter(arg)
@@ -2526,7 +3044,8 @@ local function HandleForgetCharacter(arg)
 			FormatCharacter(matches[1], ownRealm), count, count == 1 and "" or "s", matches[1]))
 	else
 		local count = ns.ForgetCharacter(matches[1])
-		ns.Print(string.format("Removed %s from %d recipe%s.", FormatCharacter(matches[1], ownRealm), count, count == 1 and "" or "s"))
+		ns.Print(string.format("Removed %s from %d recipe%s.", FormatCharacter(matches[1], ownRealm), count, count == 1 and "" or "s")
+			.. (matches[1] == GetCharacterKey() and RELEARN_NOTE or ""))
 	end
 end
 
@@ -2556,7 +3075,8 @@ function ns.HandleRecipesCommand(rest)
 		ns.Print(string.format("This deletes all %d saved recipes. Type %s to continue, or /ju recipes forget <character> to remove one character.", total, forgetHint))
 	elseif lowered == "forget confirm" then
 		local count = ns.ForgetRecipes()
-		ns.Print(string.format("Forgot %d saved recipe%s.", count, count == 1 and "" or "s"))
+		ns.Print(string.format("Forgot %d saved recipe%s.", count, count == 1 and "" or "s")
+			.. " The recipes the character you are playing knows will be saved again automatically.")
 	elseif lowered:find("^forget ") then
 		HandleForgetCharacter(lowered:sub(8))
 	elseif CheckLookupEnabled() then
@@ -2564,7 +3084,7 @@ function ns.HandleRecipesCommand(rest)
 		if itemID then
 			ns.ShowRecipes(itemID)
 		elseif #matches == 0 then
-			ns.Print("No saved ingredient matches \"" .. rest .. "\". Use an item link or ID, or open your profession windows so Jimmy's Utils can learn their recipes.")
+			ns.Print("No saved ingredient matches \"" .. rest .. "\". Use an item link or ID.")
 		else
 			ns.Print("Several items match \"" .. rest .. "\", be more specific or use the item ID:")
 			for i = 1, math.min(#matches, MAX_MATCHES) do
@@ -2610,10 +3130,22 @@ function ns.InitRecipes(database)
 			CancelScan()
 		elseif event == "TRADE_SKILL_LIST_UPDATE" then
 			ScheduleScan(false)
-		elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_DATA_SOURCE_CHANGED" or event == "NEW_RECIPE_LEARNED" then
+		elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_DATA_SOURCE_CHANGED" then
 			ScheduleScan(true)
+		elseif event == "NEW_RECIPE_LEARNED" then
+			ScheduleScan(true)
+			ScheduleLearn()
 		elseif event == "PLAYER_LOGIN" or event == "SKILL_LINES_CHANGED" then
 			SyncOwnProfessions()
+			ScheduleLearn()
+		elseif event == "LEARNED_SPELL_IN_SKILL_LINE" or event == "SPELLS_CHANGED" then
+			ScheduleLearn()
+		elseif event == "SPELL_DATA_LOAD_RESULT" then
+			-- A spell name that was missing may be there now; a failed load is left to the timer, which gives up after a few tries.
+			local spellID, success = ...
+			if not IsSecret(spellID) and not IsSecret(success) and success == true and pendingSpells[spellID] then
+				ScheduleLearn()
+			end
 		elseif event == "ITEM_DATA_LOAD_RESULT" then
 			OnItemDataLoaded((...))
 		elseif event == "BAG_UPDATE_DELAYED" then

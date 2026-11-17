@@ -6,7 +6,8 @@ local addonName, ns = ...
 -- holds the settings of the range indicator; "Recipes" explains the recipe lookup, shows
 -- its key binding and what is saved, and can forget the saved recipes; "Mail" switches the
 -- mail features (the recent mail recipients list and the "materials in your mail" window) on, clears the list and mentions the
--- "materials in your mail" command. A strip under the pages holds the check box of the minimap button. It is built lazily
+-- "materials in your mail" command. The Recipes and Mail tabs also list the professions of the saved recipes with a check
+-- box each, to hide a profession from the recipes window or the materials window. A strip under the pages holds the check box of the minimap button. It is built lazily
 -- the first time it is opened and refreshed from the saved data every time it
 -- is shown, because profile switches change every weight and new stats can be
 -- detected on items between two openings. Settings > AddOns keeps a tiny canvas
@@ -986,13 +987,134 @@ end
 --------------------------------------------------------------------------------
 
 local RECIPES_BINDING = "JIMMYSUTILS_RECIPES"
-local RECIPES_HELP = "Jimmy's Utils learns the recipes of your professions whenever you open a profession window, "
-	.. "and remembers which of your characters know them. Point at an item and press the key below (or type "
+local RECIPES_HELP = "Jimmy's Utils remembers the recipes of your professions and which of your characters know them. "
+	.. "Point at an item and press the key below (or type "
 	.. "/ju recipes <item link, ID or name>) to list the saved recipes that use it as an ingredient, and where to get "
 	.. "the ones nobody knows."
 local RECIPES_NOTE = "Who knows a recipe is always shown. Where to get a recipe that no character knows only works if the "
-	.. "client gives addons recipes you have not learned, which Forever's own profession window hides: open a profession "
-	.. "window and type /ju recipes status to see whether it does."
+	.. "client gives addons recipes you have not learned, which Forever's own profession window hides: type "
+	.. "/ju recipes status with a profession window open to see whether it does."
+
+-- "Professions shown in the window": one check box per profession found in the saved recipes (checked = shown; unchecking
+-- hides the profession from the feature's window, see Recipes.lua and MailMaterials.lua), in columns. A profession that is
+-- hidden but has no saved recipe any more is listed too (unchecked), so it can be shown again. With nothing saved and nothing
+-- hidden a grey line says so. section:Refresh() rebuilds the check boxes from the saved data and returns how tall the section
+-- is (so a scrolling page can size its content). `getHidden()` returns the saved set { [lowercase profession] = true }
+-- and `setHidden(profession, hidden)` saves one change and refreshes the open window.
+local PROFESSIONS_HEADER = "Professions shown in the window"
+local PROFESSIONS_NONE = "No recipes are saved yet, so there are no professions to choose from."
+local PROFESSIONS_HEADER_HEIGHT = 20 -- the header line, and the notice or the first row under it
+local PROFESSION_ROW_HEIGHT = 22
+local PROFESSION_CHECK_SIZE = 22
+local PROFESSION_TWO_COLUMNS_MAX = 12 -- more professions than this use three columns
+local PROFESSION_LABEL_PADDING = 28 -- the check box and the gap before its label
+
+local function BuildProfessionSection(parent, x, y, width, getHidden, setHidden)
+	local section = { checks = {} }
+
+	section.header = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	section.header:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+	section.header:SetText(PROFESSIONS_HEADER)
+
+	section.none = parent:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	section.none:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - PROFESSIONS_HEADER_HEIGHT)
+	section.none:SetWidth(width)
+	section.none:SetHeight(36)
+	section.none:SetJustifyH("LEFT")
+	section.none:SetJustifyV("TOP")
+	section.none:SetText(PROFESSIONS_NONE)
+	section.none:SetTextColor(0.5, 0.5, 0.5)
+
+	local function AcquireCheck(index)
+		local check = section.checks[index]
+		if check then
+			return check
+		end
+		check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+		check:SetSize(PROFESSION_CHECK_SIZE, PROFESSION_CHECK_SIZE)
+		check.Text:SetFontObject("GameFontHighlightSmall")
+		check.Text:SetWordWrap(false)
+		check:SetScript("OnClick", function(self)
+			DisarmConfirms()
+			setHidden(self.profession, not self:GetChecked())
+		end)
+		check:HookScript("OnEnter", function(self)
+			ShowTooltip(self, self.label, "Checked: this profession is listed in the window. Unchecked: it is hidden. Saved for all your characters.")
+		end)
+		check:HookScript("OnLeave", HideTooltip)
+		section.checks[index] = check
+		return check
+	end
+
+	function section:Refresh()
+		local hidden = getHidden()
+		-- One entry per profession whatever the case, labeled with the first spelling saved.
+		local list, seen = {}, {}
+		local _, professions = ns.GetRecipeSummary()
+		for _, profession in ipairs(professions) do
+			local key = ns.ProfessionKey(profession.name)
+			if key and not seen[key] then
+				seen[key] = true
+				list[#list + 1] = { key = key, label = profession.name:match("^%s*(.-)%s*$") }
+			end
+		end
+		local extra = {}
+		for key in pairs(hidden) do
+			if not seen[key] then
+				extra[#extra + 1] = key
+			end
+		end
+		if #extra > 0 then
+			local names = ns.GetHiddenProfessionNames(hidden) -- sorted like the keys, spelled as saved
+			for _, name in ipairs(names) do
+				local key = ns.ProfessionKey(name)
+				if key and not seen[key] then
+					seen[key] = true
+					list[#list + 1] = { key = key, label = name }
+				end
+			end
+		end
+		table.sort(list, function(a, b)
+			if a.key ~= b.key then
+				return a.key < b.key
+			end
+			return a.label < b.label
+		end)
+
+		local columns = #list > PROFESSION_TWO_COLUMNS_MAX and 3 or 2
+		local columnWidth = math.floor(width / columns)
+		for index, item in ipairs(list) do
+			local check = AcquireCheck(index)
+			local row = math.floor((index - 1) / columns)
+			local column = (index - 1) % columns
+			check.profession, check.label = item.key, item.label
+			check.Text:SetWidth(columnWidth - PROFESSION_LABEL_PADDING)
+			check.Text:SetText((item.label:gsub("|", "||")))
+			check:ClearAllPoints()
+			check:SetPoint("TOPLEFT", parent, "TOPLEFT", x - 4 + column * columnWidth, y - PROFESSIONS_HEADER_HEIGHT - row * PROFESSION_ROW_HEIGHT)
+			check:SetChecked(not hidden[item.key])
+			check:Show()
+		end
+		for index = #list + 1, #section.checks do
+			section.checks[index]:Hide()
+		end
+		section.none:SetShown(#list == 0)
+		if #list == 0 then
+			return PROFESSIONS_HEADER_HEIGHT + 36
+		end
+		return PROFESSIONS_HEADER_HEIGHT + math.ceil(#list / columns) * PROFESSION_ROW_HEIGHT
+	end
+
+	return section
+end
+
+local RECIPES_SCROLL_NAME = "JimmysUtilsRecipesPageScroll"
+local RECIPES_SCROLL_TOP = 58 -- below the enable check box
+local RECIPES_SCROLL_BOTTOM = 44 -- above the forget button and the status line
+local RECIPES_TEXT_WIDTH = 298 -- the scroll frame is 310 wide (page minus margins and the scroll bar)
+local RECIPES_PROFESSIONS_TOP = 102 -- where the professions section starts inside the scrolling content: right under the saved recipes
+local RECIPES_REST_GAP = 12 -- between the professions section and the texts below it (they move down with its height)
+local RECIPES_REST_HEIGHT = 266 -- the lookup header and help, the key binding and the note, below the section
 
 local function GetBindingDescription()
 	local keys = {}
@@ -1018,7 +1140,7 @@ local function RefreshRecipesPage()
 
 	local total, professions = ns.GetRecipeSummary()
 	if total == 0 then
-		ui.recipesCounts:SetText("Nothing saved yet. Open a profession window to learn its recipes.")
+		ui.recipesCounts:SetText("Nothing saved yet.")
 		ui.recipesCounts:SetTextColor(1, 0.19, 0.19) -- no data: red
 	else
 		ui.recipesCounts:SetTextColor(1, 1, 1)
@@ -1030,6 +1152,16 @@ local function RefreshRecipesPage()
 		ui.recipesCounts:SetText(table.concat(parts, ", ") .. "\nTotal: " .. total)
 	end
 	ui.forgetButton:SetEnabled(total > 0)
+
+	-- New professions can appear with every scan, so the check boxes are rebuilt each time. The texts under the section move
+	-- down with it and the page scrolls to fit them.
+	local used = ui.recipesProfessions:Refresh()
+	local restTop = RECIPES_PROFESSIONS_TOP + used + RECIPES_REST_GAP
+	for _, item in ipairs(ui.recipesRest) do
+		item.widget:ClearAllPoints()
+		item.widget:SetPoint("TOPLEFT", ui.recipesContent, "TOPLEFT", 4, -(restTop + item.offset))
+	end
+	ui.recipesContent:SetHeight(restTop + RECIPES_REST_HEIGHT + 8)
 end
 
 -- Same two-step confirmation for forgetting every saved recipe.
@@ -1061,49 +1193,70 @@ local function BuildRecipesPage(page)
 	ui.recipesEnable = CreateToggle(page, "Enable recipe lookup", 12, -32, function(checked)
 		DisarmConfirms()
 		ns.SetRecipeLookupEnabled(checked)
-	end, "Learns the recipes of your profession windows and answers the lookup (key binding and /ju recipes). Off stops both and closes the recipes window; the saved recipes are kept. The same as /ju recipes on and off.")
+	end, "Saves recipes and answers the lookup (key binding and /ju recipes). Off stops both and closes the recipes window; the saved recipes are kept. The same as /ju recipes on and off.")
 
-	local header = page:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	header:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -60)
+	-- Everything under the check box scrolls: the page has no room left for the professions section after the texts. The
+	-- scroll frame is named so the template's "$parentScrollBar" children get a unique, namespaced global name.
+	ui.recipesScroll = CreateFrame("ScrollFrame", RECIPES_SCROLL_NAME, page, "UIPanelScrollFrameTemplate")
+	ui.recipesScroll:SetPoint("TOPLEFT", page, "TOPLEFT", 14, -RECIPES_SCROLL_TOP)
+	ui.recipesScroll:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -36, RECIPES_SCROLL_BOTTOM)
+	local content = CreateFrame("Frame", nil, ui.recipesScroll)
+	content:SetSize(LIST_WIDTH, RECIPES_PROFESSIONS_TOP + RECIPES_REST_HEIGHT)
+	ui.recipesScroll:SetScrollChild(content)
+	ui.recipesContent = content
+
+	-- Inside the scrolling content, text 4 px from its left. Saved recipes first, then the professions section (so its header
+	-- and first rows are in view without scrolling), then the texts that explain the lookup; those are placed by
+	-- RefreshRecipesPage, below the section.
+	local savedHeader = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	savedHeader:SetPoint("TOPLEFT", content, "TOPLEFT", 4, -2)
+	savedHeader:SetText("Saved recipes")
+
+	ui.recipesCounts = content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	ui.recipesCounts:SetPoint("TOPLEFT", content, "TOPLEFT", 4, -22)
+	ui.recipesCounts:SetWidth(RECIPES_TEXT_WIDTH)
+	ui.recipesCounts:SetHeight(72)
+	ui.recipesCounts:SetJustifyH("LEFT")
+	ui.recipesCounts:SetJustifyV("TOP")
+
+	-- Which professions the recipes window lists (saved account-wide).
+	ui.recipesProfessions = BuildProfessionSection(content, 4, -RECIPES_PROFESSIONS_TOP, RECIPES_TEXT_WIDTH,
+		ns.GetHiddenRecipeProfessions, ns.SetRecipeProfessionHidden)
+
+	local header = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 	header:SetText("Recipe lookup")
 
-	local help = page:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	help:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -80)
-	help:SetWidth(324)
+	local help = content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	help:SetWidth(RECIPES_TEXT_WIDTH)
 	help:SetHeight(98)
 	help:SetJustifyH("LEFT")
 	help:SetJustifyV("TOP")
 	help:SetText(RECIPES_HELP)
 
-	local bindingHeader = page:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	bindingHeader:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -186)
+	local bindingHeader = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 	bindingHeader:SetText("Key binding")
 
-	ui.recipesBinding = page:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	ui.recipesBinding:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -206)
-	ui.recipesBinding:SetWidth(324)
+	ui.recipesBinding = content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	ui.recipesBinding:SetWidth(RECIPES_TEXT_WIDTH)
 	ui.recipesBinding:SetHeight(42)
 	ui.recipesBinding:SetJustifyH("LEFT")
 	ui.recipesBinding:SetJustifyV("TOP")
 
-	local savedHeader = page:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-	savedHeader:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -256)
-	savedHeader:SetText("Saved recipes")
-
-	ui.recipesCounts = page:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-	ui.recipesCounts:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -276)
-	ui.recipesCounts:SetWidth(324)
-	ui.recipesCounts:SetHeight(72)
-	ui.recipesCounts:SetJustifyH("LEFT")
-	ui.recipesCounts:SetJustifyV("TOP")
-
-	local note = page:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-	note:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -354)
-	note:SetWidth(324)
-	note:SetHeight(60)
+	local note = content:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	note:SetWidth(RECIPES_TEXT_WIDTH)
+	note:SetHeight(72)
 	note:SetJustifyH("LEFT")
 	note:SetJustifyV("TOP")
 	note:SetText(RECIPES_NOTE)
+
+	-- Offsets from the top of that block: header 0, help 20 (98 tall), binding header 126, binding 146 (42), note 194 (72).
+	ui.recipesRest = {
+		{ widget = header, offset = 0 }, { widget = help, offset = 20 }, { widget = bindingHeader, offset = 126 },
+		{ widget = ui.recipesBinding, offset = 146 }, { widget = note, offset = 194 },
+	}
+	for _, item in ipairs(ui.recipesRest) do
+		item.widget:SetPoint("TOPLEFT", content, "TOPLEFT", 4, -(RECIPES_PROFESSIONS_TOP + RECIPES_REST_GAP + item.offset))
+	end
 
 	ui.forgetButton = CreateButton(page, FORGET_LABEL, 150, ForgetSavedRecipes)
 	ui.forgetButton:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", -16, 12)
@@ -1141,6 +1294,7 @@ local function RefreshMailPage()
 	local count = ns.GetMailRecipientCount()
 	ui.mailCount:SetText(string.format("Saved for this realm: %d", count))
 	ui.mailClear:SetEnabled(count > 0)
+	ui.mailProfessions:Refresh() -- new professions can appear with every scan
 end
 
 local function BuildMailPage(page)
@@ -1186,6 +1340,11 @@ local function BuildMailPage(page)
 	materialsHint:SetJustifyH("LEFT")
 	materialsHint:SetJustifyV("TOP")
 	materialsHint:SetText(MATERIALS_HINT)
+
+	-- Which professions the materials window lists (saved account-wide): the header at -250, the rows from -270 on, 22 px each;
+	-- six rows (twelve professions in two columns, up to eighteen in three) end at -402, above the status line at the bottom.
+	ui.mailProfessions = BuildProfessionSection(page, 18, -250, 320,
+		ns.GetHiddenMaterialProfessions, ns.SetMaterialProfessionHidden)
 
 	ui.mailStatus = page:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 	ui.mailStatus:SetPoint("BOTTOMLEFT", page, "BOTTOMLEFT", 16, 12)
@@ -1495,6 +1654,10 @@ end
 function ns.RefreshRecipesPage()
 	if ui and window and window:IsShown() then
 		RefreshRecipesPage()
+		-- The Mail tab lists the same professions: it follows too, with its layout.
+		if ui.mailProfessions then
+			ui.mailProfessions:Refresh()
+		end
 	end
 end
 

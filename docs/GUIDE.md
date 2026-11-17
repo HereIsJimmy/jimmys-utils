@@ -47,11 +47,10 @@ The first widget of every tab is the check box that switches that feature on or 
 | --- | --- | --- | --- |
 | Stat Weights | Enable stat weights | `/ju stats on` / `off` | No score lines (and no breakdown) are added to item tooltips. Profiles and weights can still be edited, and `/ju dump` still works |
 | Range Check | Enable range check | `/ju range` (toggles) | The indicator is hidden and not updated |
-| Recipes | Enable recipe lookup | `/ju recipes on` / `off` | Profession windows are not scanned, the key binding and `/ju recipes <item>` only say "Recipe lookup is off. Turn it on with /ju recipes on." and the recipes window (and the Wowhead link popup) closes. The saved recipes are kept (`/ju recipes status` and `forget` still work, and the mail materials keep using them) |
+| Recipes | Enable recipe lookup | `/ju recipes on` / `off` | Recipes are not saved, the key binding and `/ju recipes <item>` only say "Recipe lookup is off. Turn it on with /ju recipes on." and the recipes window (and the Wowhead link popup) closes. The saved recipes are kept (`/ju recipes status` and `forget` still work, and the mail materials keep using them) |
 | Mail | Enable mail features (recent recipients and mail materials) | `/ju mail on` / `off` | The recent recipients panel is hidden and no recipients are recorded, the inbox is not scanned for materials, `/ju materials` says "Mail features are off. Turn them on with /ju mail on." and the materials window closes. The saved list and the last scan are kept |
 
-Turning a feature back on resumes it where it can: tooltips at once, the range indicator at once, the recipe scan the next time a
-profession window updates or opens, the mail panel the next time the Send Mail tab shows, and the mailbox is read at once when it is
+Turning a feature back on resumes it where it can: tooltips at once, the range indicator at once, recipe saving at once, the mail panel the next time the Send Mail tab shows, and the mailbox is read at once when it is
 open. `/ju status` prints one line per feature, on or off.
 
 ### Minimap button
@@ -119,13 +118,16 @@ a range for the spell (for example a spell without range, or one your character 
 
 ### Recipes tab and recipe lookup
 
-The addon has no recipe database. The game only lists a profession's recipes while its window is open, so every time you open
-one of **your own** profession windows (or its list updates) Jimmy's Utils reads the recipes, their ingredients and whether this
-character knows them, and saves them account-wide. Open each profession of each character once to fill the data. Linked
+Jimmy's Utils saves, account-wide, the recipes of your characters: their ingredients and whether each character knows them. Two
+sources feed it. The bundled game data (`Data/RecipeData.lua`) lists the recipes of each profession with their ingredients and
+output; for each profession of the character, `IsPlayerSpell` tells which of those recipes it knows, so no profession window is needed.
+Only recipes the character knows are saved from it (never the unknown ones), and a recipe the character no longer knows is unmarked.
+Whenever one of **your own** profession windows opens (or its list updates) the recipes it lists are read too: that covers recipes
+the bundled data misses, and a recipe saved from a window keeps its richer data (for example slots with a choice of items). Linked
 professions, guild and guild member windows, runeforging and NPC crafting windows are ignored. A profession window that is still
 loading is waited for, and closing the window cancels a pending scan. The profession window's own settings are never changed.
 
-The **Enable recipe lookup** check box at the top of the tab (or `/ju recipes on` / `off`) switches both the scanning and the lookup:
+The **Enable recipe lookup** check box at the top of the tab (or `/ju recipes on` / `off`) switches both the saving and the lookup:
 see [Feature toggles](#feature-toggles).
 
 To look an item up:
@@ -163,7 +165,7 @@ recipe items](#skill-up-chance-and-recipe-items)) the first box, **Recipe item**
 **Recipe item (search)**, is a Wowhead search for that item's name, which is the profession's prefix plus the recipe name
 (`https://www.wowhead.com/forever/search?q=Recipe%3A+Minor+Healing+Potion`, with spaces as `+` and other characters
 percent-encoded). The second box, **Recipe spell**, is the page of the recipe's spell
-(`https://www.wowhead.com/forever/spell=<recipe ID>`). Recipes taught by a trainer have no item, so use the spell page for those.
+(`https://www.wowhead.com/forever/spell=<recipe ID>`). Recipes the game data has no teaching item for (taught by a trainer, a quest...) have no item, so the window shows only the spell page for those.
 The prefixes (used only for the search) are:
 
 | Profession | Prefix |
@@ -189,6 +191,13 @@ recipe tracker uses). This works only for recipes the character you are playing 
 **Profession filter.** When the results hold recipes of more than one profession, a row of small buttons appears above the list
 (**All** and one per profession, wrapping onto more rows when they do not fit); click one to list only that profession's recipes. The choice
 is kept until you close the game and goes back to **All** when its profession is not in the results of the next lookup.
+
+**Hiding professions for good.** Under **Professions shown in the window** on the Recipes tab, right under the saved recipes, there is one check box per
+profession found in the saved recipes; uncheck one to leave that profession out of this window (checked means shown). The choice is saved for your whole
+account (`recipeLookup.hiddenProfessions`) and an open window follows at once. Hidden professions are dropped before the buttons are built, so the
+buttons only offer what is left. A small line above the buttons says *Professions can be hidden permanently in the settings (/ju).* in grey while the
+buttons are shown, and, in orange, *Hidden in the settings: Alchemy, Cooking* whenever something is hidden (even with no buttons); when hiding leaves
+no recipe, the window says they are all hidden by the profession settings. The materials window has its own list, on the Mail tab.
 
 **Recipes nobody knows.** They only show up if the client gives addons recipes the character has not learned.
 Forever's own profession window hides them, so it may be that every recipe the addon sees is already known by the character
@@ -218,11 +227,12 @@ recipe the table has no thresholds for, when the game's colour is known. With ne
 `Skill-up chance: 88% (yellow 55, green 75, grey 95; your skill 60)`.
 
 The same data names the item that teaches each recipe (the lowest item ID when several do), which is what the **Recipe item** box of the
-Wowhead window shows. Recipes taught by a trainer have no item and keep the search.
+Wowhead window shows. Recipes the game data has no teaching item for (trainer, quest...) show only the spell page: there is no item to search for.
 
-**Data source.** `Data/RecipeData.lua` is generated and must not be edited. It holds `ns.RecipeThresholds[spellID] = { yellow, grey }` and
-`ns.RecipeTeachers[spellID] = itemID` (the recipe ID the profession window uses is the spell ID), taken from the SkillLineAbility,
-ItemXItemEffect and ItemEffect tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
+**Data source.** `Data/RecipeData.lua` is generated and must not be edited. It holds `ns.RecipeThresholds[spellID] = { yellow, grey }`,
+`ns.RecipeTeachers[spellID] = itemID` (the recipe ID the profession window uses is the spell ID), `ns.RecipeSkillLines[spellID] = skillLineID` (a sorted list `{ line, line }` for the few recipes that belong to several),
+`ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... }` and `ns.RecipeOutputs[spellID] = itemID`, taken from the SkillLineAbility,
+ItemXItemEffect, ItemEffect, SpellReagents and SpellEffect tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
 Blizzard's game data; this addon is not affiliated with or endorsed by Blizzard. To regenerate it for a newer client build, change the `BUILD`
 constant in `tools/gen_recipe_data.py` and run, from the addon folder, `python -I tools/gen_recipe_data.py` (Python 3, standard library only;
 `--cache <folder>` keeps the downloaded CSV files, `--refresh` downloads them again). The script refuses to write the file if it no longer
@@ -262,6 +272,8 @@ current character: for another character's recipe the chat says who knows it; lo
 When the recipes shown belong to more than one profession, a row of **profession buttons** (**All** and one per profession) sits above the
 list; click one to see only that profession's recipes in every character's group (a character with none is hidden). The choice is kept for
 the session and goes back to **All** when its profession leaves the list, for example after turning **Show other characters** off.
+Professions can also be hidden for good with the check boxes under **Professions shown in the window** on the **Mail** tab of the settings (saved
+for your whole account as `mailMaterials.hiddenProfessions`, separate from the recipes window's list); the same line above the buttons tells which are hidden.
 
 What counts for each character:
 
@@ -293,10 +305,11 @@ The check box **Show other characters** at the top of the window (saved, on by d
   `Name-Realm`, in any case, on the current realm) are added to that character's saved mailbox when the game confirms the letter; the
   character's next scan of its own mailbox replaces everything.
 - **Forgetting a character.** `/ju recipes forget <character>` removes the character's recipes together with its saved profession skills, bags, bank and
-  mailbox. Characters that are not saved as knowing a recipe are not listed anyway.
+  mailbox. Characters that are not saved as knowing a recipe are not listed anyway. Forgetting the character you are playing (or every recipe)
+  does not last: the next learning pass saves the recipes that character knows again automatically, and the command's answer says so.
 - **More than 50 letters.** The client lists at most 50 letters at a time; the window then says "Only the first 50 mails are scanned; take some
   mail to see the rest."
-- **Recipes.** The recipes are the ones saved by the recipe lookup, so open each of your profession windows once on each character.
+- **Recipes.** The recipes are the ones saved by the recipe lookup.
   Without any (for every character that is shown), the window says so.
 - **Limits.** Mail sent to one of your characters is added to its saved mailbox when the game confirms the letter. If you close the mailbox before the
   confirmation arrives, the letter is not recorded (the addon forgets unconfirmed letters when the mailbox closes), and mail that is returned to you,
@@ -320,7 +333,8 @@ is open) with that list:
 
 The **Mail** tab has an **Enable mail features (recent recipients and mail materials)** check box, the master switch of both mail
 features (while it is off the panel is hidden, no recipients are recorded and the mailbox is not scanned for materials; what was saved is
-kept), and a **Clear recent recipients** button, which empties the list of the current realm.
+kept), a **Clear recent recipients** button, which empties the list of the current realm, and the **Professions shown in the window** check boxes of the
+materials window (see [Recipe materials in your mail](#recipe-materials-in-your-mail)).
 
 ### Mailbox buttons
 
@@ -366,7 +380,7 @@ you switch them with `/ju mail on` / `off` or the check box).
 | `/ju recipes on` / `/ju recipes off` | Turn the recipe lookup (learning recipes and the lookup) on or off; the saved recipes are kept |
 | `/ju recipes <item link \| item ID \| item name>` | Open the list of saved recipes that use the item as an ingredient |
 | `/ju recipes` | The same for the item you are pointing at (prints the usage when there is none) |
-| `/ju recipes status` | Show how many recipes are saved, per profession and per character, and what the client gives the addon: whether `GetAllRecipeIDs` exists and, with a profession window open, how many recipes it and `GetFilteredRecipeIDs` return and how many are not learned (`scan` still works as an alias; recipes are saved when you open a profession window, this command does not save anything itself) |
+| `/ju recipes status` | Show how many recipes are saved, per profession and per character, and what the client gives the addon: whether `GetAllRecipeIDs` exists and, with a profession window open, how many recipes it and `GetFilteredRecipeIDs` return and how many are not learned (`scan` still works as an alias; this command does not save anything itself) |
 | `/ju recipes forget` | Ask to delete the saved recipes; `/ju recipes forget confirm` really deletes them |
 | `/ju recipes forget <character>` | Ask to remove one character (`Name`, or `Name-Realm` when the name exists on several realms) from the saved recipes, together with its saved bags, bank and mailbox; add `confirm` to do it |
 | `/ju mail` | Show whether the mail features (recent recipients and mail materials) are on, how many recipients are saved for this realm, and the usage |
@@ -417,6 +431,16 @@ Stats with a weight of 0 do not contribute. The tooltip line is hidden for items
   `GetRecipeSchematic(recipeID, false)` (basic slots, plus modifying slots the recipe requires; a `variableQuantities` entry for the
   very item wins over the slot's quantity) and, for recipes the character does not know, `GetRecipeSourceText`. Every call goes
   through `pcall` and any secret value is skipped, never compared or concatenated.
+  Without a window, `PLAYER_LOGIN`, `SKILL_LINES_CHANGED`, `SPELLS_CHANGED`, `LEARNED_SPELL_IN_SKILL_LINE` and `NEW_RECIPE_LEARNED` schedule
+  a pass (a one second trailing debounce) that goes through the bundled recipes of each profession's skill line (the `skillLine` that
+  `GetProfessionInfo` returns) with `IsPlayerSpell` (an answer that is not a plain boolean is ignored). A known recipe is marked as known and, when no
+  window saved it, saved from the bundle (name from `C_Spell.GetSpellName`, asked for with `C_Spell.RequestLoadSpellData` and retried on
+  `SPELL_DATA_LOAD_RESULT` and on a timer; each spell is asked for five times per session at most, and events do not reset that; a recipe is never
+  saved without a name); a saved recipe of that skill line the character does not know is unmarked, unless `IsPlayerSpell` says no to every
+  recipe of the line (the spells are probably not loaded yet): nothing in that line is unmarked, and the pass is repeated up to five times before
+  the answer is trusted. A recipe in several skill lines is indexed under each of them. At `PLAYER_LOGIN` and `SKILL_LINES_CHANGED` the
+  character is also taken off the recipes of professions it no longer has: a bundled recipe is kept while the character has any of its skill
+  lines (when the client gives the skill line of every profession), any other recipe by the profession name it was saved under.
 - **Recent mail recipients.** The recipient is read from a `hooksecurefunc("SendMail", ...)` hook, which runs after Blizzard's own call and
   changes nothing about it; it joins a queue of at most three unconfirmed letters, the oldest of which is confirmed by `MAIL_SEND_SUCCESS` or dropped by a
   `MAIL_FAILED` without an item ID (inbox failures carry one and are ignored); `MAIL_SHOW` and `MAIL_CLOSED` empty the queue. The panel is a child of
@@ -484,7 +508,7 @@ A quick first session:
    screen**, unlock the indicator, drag it, lock it, and `/reload` to confirm the position is kept. Repeat in combat.
 7. Hover items during combat as well. There should be no errors, even if the line is skipped because the game hides a value from
    addons.
-8. Recipe lookup: open each of your profession windows once, then run `/ju recipes status` to see what was saved (the Recipes tab shows
+8. Recipe lookup: run `/ju recipes status` to see what was saved (the Recipes tab shows
    the same counts) and what the client gives the addon. If it says nothing is saved, the client did not give the addon a recipe list: see "Recipe data" above and
    report which of `C_TradeSkillUI.GetAllRecipeIDs` / `GetFilteredRecipeIDs` exist. Assign a key under Keybindings > AddOns, hover an
    ingredient in your bags and press it; also try `/ju recipes <item link>` and `/ju recipes <part of a name>`. Check that
@@ -499,7 +523,7 @@ A quick first session:
    tooltip explains why; nothing is taken). Open another letter while one is open (the button follows), take the items by hand (it greys out), and check `/ju mail off` hides
    both buttons at once and `/ju mail on` brings them back.
    Also try each feature's off switch (`/ju stats off`, `/ju range`, `/ju recipes off`, `/ju mail off`, or the check boxes) and `/ju status`.
-10. Recipe materials: open your profession windows once on each character, and open the bank (and the account bank) once on each, then send one of your characters a letter holding an ingredient of a recipe it knows (or
+10. Recipe materials: open the bank (and the account bank) once on each character, then send one of your characters a letter holding an ingredient of a recipe it knows (or
     use mail you already have). Log in on another character of the same realm: `/ju materials` should list it under its own header with `bags ... ago, bank ... ago`, and with the
     first character's mail items marked `(N in your mail)` and **Craftable after mail** when they are needed. Mail yourself items from one character to another and check they appear as `(N in their mail)` there. Open the mailbox: nothing should open by itself. Type `/ju materials`: the
     **Materials in your mail** window should list the recipe and show the ingredient counts. Check the numbers against your bags, that a COD
@@ -511,7 +535,7 @@ A quick first session:
 12. Skill-up chances: open a profession window, then `/ju recipes <an ingredient>`. Recipes should show `(NN%)` after their name in the
     window's colors (compare them with the colors in the profession window itself), and the tooltip should read `Skill-up chance: ...`.
     Craft something until the skill goes up with the lookup window open: the chance follows. Check a recipe whose item you know (the
-    Wowhead window's first box should be `item=...`), and one taught by a trainer (it keeps the search).
+    Wowhead window's first box should be `item=...`), and one with no teaching item, such as a trainer recipe (only the spell page is shown).
 13. On a non-English client the "Equip:" fallback is off; note which effects only appear as "Equip:" text.
 
 ## Files
@@ -533,10 +557,10 @@ A quick first session:
 
 ### Saved data
 
-Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, last tab, and the
+Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup and its `hiddenProfessions`, last tab, and the
 saved recipes: `recipes`, `recipeKnownBy` with the characters that know each recipe as `Name-Realm`, and `itemNames` with the names
 of ingredients, and `recipeSkill` with each character's rank and maximum in each profession; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
-the materials window and `showOthers`; `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
+the materials window, `showOthers` and `hiddenProfessions`; `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
 (with the times they were seen), and `accountBank` with the account bank's items; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the active profile, and the range check spell; older versions also kept `mailItems`, the last scan of the mailbox, here: it is moved into `inventory` at load). The variable names are unchanged from the
 addon's previous name, but the client stores them in a file named after the addon folder, i.e. now
 `WTF\Account\<account>\SavedVariables\JimmysUtils.lua` and `WTF\Account\<account>\<realm>\<character>\SavedVariables\JimmysUtils.lua`.

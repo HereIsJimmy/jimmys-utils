@@ -534,11 +534,19 @@ local function CreateMaterialsButton()
 	local close = MailFrame.CloseButton or MailFrameCloseButton
 	if close then
 		button:SetPoint("RIGHT", close, "LEFT", -2, 0)
-		button:SetFrameLevel(close:GetFrameLevel())
 	else
 		button:SetPoint("TOPRIGHT", MailFrame, "TOPRIGHT", -26, -2)
-		button:SetFrameLevel(MailFrame:GetFrameLevel() + 10)
 	end
+	-- Above every layer of the title bar (the template puts its title and border frames high up), so clicks reach it.
+	local level = MailFrame:GetFrameLevel() + 10
+	for _, other in ipairs({ close, MailFrame.TitleContainer, MailFrame.NineSlice }) do
+		if type(other) == "table" and other.GetFrameLevel then
+			level = math.max(level, other:GetFrameLevel() + 1)
+		end
+	end
+	button:SetFrameLevel(level)
+	button:EnableMouse(true)
+	button:RegisterForClicks("LeftButtonUp")
 
 	local icon = button:CreateTexture(nil, "ARTWORK")
 	icon:SetAllPoints(button)

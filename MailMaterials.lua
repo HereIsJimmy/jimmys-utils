@@ -8,7 +8,8 @@ local addonName, ns = ...
 	characters" check box is off.
 
 	Saved data (validated in InitData):
-		JimmysStatWeightsDB.mailMaterials = { position = { point, relPoint, x, y }, showOthers = true } -- window position, other characters shown
+		JimmysStatWeightsDB.mailMaterials = { position = { point, relPoint, x, y }, showOthers = true, hiddenProfessions = { [lowercase profession] = true } }
+			-- window position, other characters shown, professions the window leaves out (Options > Mail)
 		JimmysStatWeightsDB.inventory[character].mail = { time = time(), counts = { [itemID] = quantity }, cod = { [itemID] = true }, partial = bool }
 
 	The snapshot of the mailbox lives with the other item snapshots of the character (Inventory.lua: ns.GetMailSnapshot /
@@ -37,7 +38,9 @@ local addonName, ns = ...
 	Profession filter: when the recipes shown (after "Show other characters") belong to more than one profession, a button bar
 	(ns.CreateProfessionFilter, Recipes.lua) offers "All" and one button per profession; a click lists only that profession's
 	recipes in every character's group, and a group left with none is hidden. The selection is kept for the session (not saved)
-	and falls back to "All" when the profession leaves the results.
+	and falls back to "All" when the profession leaves the results. Professions can also be hidden for good (mailMaterials.
+	hiddenProfessions, set in Options > Mail): their recipes are dropped before the bar is built, and an info line above the bar
+	names them (see ns.CreateProfessionFilter).
 
 	The window opens only with /ju materials (a toggle); a scan never opens it. It follows the mail and the bags while it is open.
 
@@ -727,19 +730,29 @@ RefreshWindow = function(data)
 	end
 	ui.partial:SetShown(snapshot ~= nil and snapshot.partial == true)
 
-	-- The filter bar offers the professions of everything that would be shown; the list shows the selected one. The list moves
-	-- down with the bar, and a character left with no recipe is not shown.
+	-- Professions hidden in the settings are dropped first; the filter bar offers the professions of everything that would
+	-- still be shown, and the list shows the selected one. The list moves down with the info line and the bar, and a
+	-- character left with no recipe is not shown.
+	local hidden = settings and settings.hiddenProfessions or {}
+	local found, keptCount, kept = 0, 0, {}
 	local professions = {}
-	for _, character in ipairs(data.characters or {}) do
+	for characterIndex, character in ipairs(data.characters or {}) do
+		kept[characterIndex] = {}
 		for _, entry in ipairs(character.entries) do
-			professions[#professions + 1] = entry.profession
+			found = found + 1
+			local key = ns.ProfessionKey and ns.ProfessionKey(entry.profession)
+			if not (key and hidden[key]) then
+				kept[characterIndex][#kept[characterIndex] + 1] = entry
+				keptCount = keptCount + 1
+				professions[#professions + 1] = entry.profession
+			end
 		end
 	end
 	PlaceScroll(ui.filter:Update(professions))
 	local groups = {}
-	for _, character in ipairs(data.characters or {}) do
+	for characterIndex, character in ipairs(data.characters or {}) do
 		local entries = {}
-		for _, entry in ipairs(character.entries) do
+		for _, entry in ipairs(kept[characterIndex]) do
 			if ui.filter:Matches(entry.profession) then
 				entries[#entries + 1] = entry
 			end
@@ -813,9 +826,12 @@ RefreshWindow = function(data)
 	child:SetHeight(math.max(HEADER_HEIGHT, y))
 
 	local empty
+	local hiddenAway = found > 0 and keptCount == 0 -- there were recipes, and the hidden professions took them all
 	if blockIndex == 0 then
-		if data.noRecipes then
-			empty = "Open your profession windows once so recipes can be learned."
+		if hiddenAway then
+			empty = "The recipes your mail has materials for are all hidden by the profession settings (/ju)."
+		elseif data.noRecipes then
+			empty = "No recipes are saved yet."
 		elseif not snapshot then
 			empty = "Open your mailbox to scan it for recipe materials."
 		elseif showOthers then
@@ -826,7 +842,7 @@ RefreshWindow = function(data)
 	end
 	ui.emptyText:SetText(empty or "")
 	-- Missing data (no recipes learned, mailbox never scanned) is something to fix, so it is red; the rest stays grey.
-	if blockIndex == 0 and (data.noRecipes or not snapshot) then
+	if blockIndex == 0 and not hiddenAway and (data.noRecipes or not snapshot) then
 		ui.emptyText:SetTextColor(1, 0.19, 0.19)
 	else
 		ui.emptyText:SetTextColor(0.5, 0.5, 0.5)
@@ -981,6 +997,7 @@ local function BuildWindow()
 	-- Without Recipes.lua (the module the bar comes from) there is no bar and nothing is filtered.
 	ui.filter = ns.CreateProfessionFilter and ns.CreateProfessionFilter({
 		parent = frame, left = 16, top = FILTER_TOP, width = FRAME_WIDTH - 32, listTop = LIST_TOP,
+		hidden = ns.GetHiddenMaterialProfessions,
 		onChange = function()
 			ui.scroll:SetVerticalScroll(0)
 			RefreshWindow()
@@ -1059,6 +1076,23 @@ function ns.RefreshMailMaterials()
 	if window and window:IsShown() then
 		RefreshWindow()
 	end
+end
+
+-- The saved set of professions the window leaves out: { [lowercase profession] = true } (the live table).
+function ns.GetHiddenMaterialProfessions()
+	return settings and settings.hiddenProfessions or {}
+end
+
+-- Hides or shows a profession in the window and refreshes the window when it is open. Returns false for a name that is not
+-- usable or before the data is loaded.
+function ns.SetMaterialProfessionHidden(profession, hidden)
+	local key = ns.ProfessionKey and ns.ProfessionKey(profession) -- (a copy of this file loaded alone has no Core.lua)
+	if not settings or not key then
+		return false
+	end
+	settings.hiddenProfessions[key] = hidden and true or nil
+	ns.RefreshMailMaterials()
+	return true
 end
 
 --------------------------------------------------------------------------------
@@ -1177,6 +1211,8 @@ local function InitData(db)
 	if type(settings.showOthers) ~= "boolean" then
 		settings.showOthers = true
 	end
+	-- (Core.lua cleans it; a copy of this file loaded alone keeps no hidden professions)
+	settings.hiddenProfessions = ns.CleanProfessionSet and ns.CleanProfessionSet(settings.hiddenProfessions) or {}
 	local position = settings.position
 	if type(position) ~= "table" or not VALID_POINTS[position.point] or not VALID_POINTS[position.relPoint]
 		or not PlainNumber(position.x) or not PlainNumber(position.y)
