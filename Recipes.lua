@@ -12,6 +12,7 @@ local addonName, ns = ...
 			(source is the game's "where to get it" text; it is kept, but the window only shows it in a row's tooltip when there is one)
 		JimmysStatWeightsDB.recipeKnownBy = { [recipeID] = { ["Name-Realm"] = true } }
 		JimmysStatWeightsDB.itemNames = { [itemID] = name } -- names of ingredients, so a name can be looked up offline
+		JimmysStatWeightsDB.recipeSkill = { ["Name-Realm"] = { [lowercase profession] = { rank, max, time } } } -- profession skill per character, for the skill-up chance
 		JimmysStatWeightsDB.recipeLookup = { enabled = true } -- off: no recipes are learned and the lookup is closed; what is saved is kept
 
 	Only basic reagent slots are saved (optional and finishing slots are skipped). The index reagent item -> recipes is kept
@@ -19,6 +20,15 @@ local addonName, ns = ...
 	uses); "slots" keeps how they group: the items of one slot are interchangeable choices (for example the quality tiers of an
 	herb) that together must reach the slot's quantity, as in Blizzard's own recipe tracker. Recipes saved before "slots" existed
 	have none until they are scanned again.
+
+	Skill-up chance: Data/RecipeData.lua (generated, see tools/gen_recipe_data.py) has the skill where each recipe turns yellow and
+	grey and the item that teaches it. With the skill each character had the last time its professions were read (recipeSkill) that
+	gives the chance of a skill-up (ns.GetSkillUpChance); the difficulty the open profession window reports is kept for the session
+	and only used to cross-check the data.
+
+	Profession filter: when the results hold more than one profession the window shows a button bar (ns.CreateProfessionFilter,
+	also used by the materials window) with "All" and one button per profession; a click lists only that profession's recipes.
+	The selection is kept for the session (not saved) and falls back to "All" when the profession leaves the results.
 
 	Every API result is read through pcall and skipped when it is a secret value; nothing is branched on a secret.
 	The profession window's own settings (for example "show unlearned") are never changed.
@@ -30,6 +40,9 @@ local SCROLL_NAME = "JimmysUtilsRecipesScroll"
 local FRAME_WIDTH = 380
 local FRAME_HEIGHT = 360
 local LIST_WIDTH = 316 -- scroll frame width (frame minus margins and the scroll bar)
+local LIST_LEFT = 14
+local LIST_TOP = 68 -- where the list starts below the top of the window; with the profession filter bar it starts below that
+local FILTER_TOP = 64 -- where the filter bar starts (below the header)
 local ROW_TOP_HEIGHT = 40 -- name line and detail line, above the materials
 local ROW_BOTTOM_PADDING = 6
 local MATERIALS_MIN_HEIGHT = 12 -- one line of the small font
@@ -52,6 +65,19 @@ local LINK_POPUP_HEIGHT = 170
 local LINK_BOX_WIDTH = 320
 local LINK_BUTTON_WIDTH = 60
 local LINK_BUTTON_HEIGHT = 18
+
+local CHANCE_GAP = 4 -- between a recipe name and its skill-up chance
+local ROW_NAME_AREA = LIST_WIDTH - (2 + ROW_ICON_SIZE + 6) - (4 + QTY_WIDTH + 4) -- where the name and the chance of a row fit
+
+-- The official difficulty colors (the client's own globals when they exist) by skill-up category.
+local DIFFICULTY_COLORS = {
+	orange = { global = "DIFFICULT_DIFFICULTY_COLOR", fallback = { 1, 0.5, 0.25 } },
+	yellow = { global = "FAIR_DIFFICULTY_COLOR", fallback = { 1, 1, 0 } },
+	green = { global = "EASY_DIFFICULTY_COLOR", fallback = { 0.25, 0.75, 0.25 } },
+	grey = { global = "TRIVIAL_DIFFICULTY_COLOR", fallback = { 0.5, 0.5, 0.5 } },
+}
+-- Enum.TradeskillRelativeDifficulty (Optimal, Medium, Easy, Trivial) as a category.
+local DIFFICULTY_CATEGORIES = { [0] = "orange", [1] = "yellow", [2] = "green", [3] = "grey" }
 
 local KNOWN_NAME_COLOR = { 1, 0.82, 0 }
 local UNKNOWN_NAME_COLOR = { 0.72, 0.72, 0.72 }
@@ -89,8 +115,9 @@ local DEFAULT_LOOKUP = {
 }
 
 -- Set in ns.InitRecipes.
-local db, recipes, knownBy, itemNames
+local db, recipes, knownBy, itemNames, skills
 local lookup -- db.recipeLookup
+local liveDifficulty = {} -- [character][recipeID] = { difficulty, skill }: what the profession window said in this session (not saved)
 local reagentIndex = {} -- [itemID] = sorted list of recipe IDs that use it
 local hovered = {} -- ["game" | "ref"] = itemID shown by that tooltip
 local scanTimer -- the pending scan timer (a trailing debounce)
@@ -120,6 +147,14 @@ local function IsID(value)
 		return false
 	end
 	return value == value and value > 0 and value < 2 ^ 31 and value == math.floor(value)
+end
+
+-- A whole skill level (0 up to a few thousand) that is not a secret value.
+local function IsSkillValue(value)
+	if IsSecret(value) or type(value) ~= "number" then
+		return false
+	end
+	return value == value and value >= 0 and value <= 10000 and value == math.floor(value)
 end
 
 -- The string itself, or nil for anything else (including secret values and empty strings).
@@ -274,12 +309,12 @@ end
 -- Fills missing tables and drops malformed entries, so the rest of the code can trust the data.
 local function InitData(database)
 	db = database
-	for _, key in ipairs({ "recipes", "recipeKnownBy", "itemNames" }) do
+	for _, key in ipairs({ "recipes", "recipeKnownBy", "itemNames", "recipeSkill" }) do
 		if type(db[key]) ~= "table" then
 			db[key] = {}
 		end
 	end
-	recipes, knownBy, itemNames = db.recipes, db.recipeKnownBy, db.itemNames
+	recipes, knownBy, itemNames, skills = db.recipes, db.recipeKnownBy, db.itemNames, db.recipeSkill
 
 	if type(db.recipeLookup) ~= "table" then
 		db.recipeLookup = {}
@@ -339,6 +374,25 @@ local function InitData(database)
 		end
 	end
 
+	for character, professions in pairs(skills) do
+		if type(character) ~= "string" or type(professions) ~= "table" then
+			skills[character] = nil
+		else
+			for profession, entry in pairs(professions) do
+				local valid = type(profession) == "string" and profession ~= "" and type(entry) == "table"
+					and IsSkillValue(entry.rank) and IsSkillValue(entry.max) and entry.max > 0 and entry.rank <= entry.max
+				if not valid then
+					professions[profession] = nil
+				elseif type(entry.time) ~= "number" or entry.time ~= entry.time then
+					entry.time = 0
+				end
+			end
+			if next(professions) == nil then
+				skills[character] = nil
+			end
+		end
+	end
+
 	BuildIndex()
 end
 
@@ -389,6 +443,8 @@ function ns.ForgetRecipes()
 	Wipe(recipes)
 	Wipe(knownBy)
 	Wipe(itemNames)
+	Wipe(skills)
+	Wipe(liveDifficulty)
 	Wipe(pendingNames)
 	Wipe(lastSignature)
 	BuildIndex()
@@ -436,6 +492,9 @@ function ns.FindSavedCharacters(text)
 			Consider(character)
 		end
 	end
+	for character in pairs(skills or {}) do
+		Consider(character)
+	end
 	-- Characters with saved bags, bank or mail but no recipes can be forgotten too.
 	for _, character in ipairs(ns.GetInventoryCharacters and ns.GetInventoryCharacters() or {}) do
 		Consider(character)
@@ -444,8 +503,8 @@ function ns.FindSavedCharacters(text)
 	return matches
 end
 
--- Removes a character ("Name-Realm", as returned by FindSavedCharacters) from every recipe, and its saved bags, bank
--- and mailbox (Inventory.lua). Returns how many recipes it was known for.
+-- Removes a character ("Name-Realm", as returned by FindSavedCharacters) from every recipe, and its saved profession skills,
+-- bags, bank and mailbox (Inventory.lua). Returns how many recipes it was known for.
 function ns.ForgetCharacter(character)
 	local count = 0
 	for recipeID, characters in pairs(knownBy) do
@@ -455,7 +514,10 @@ function ns.ForgetCharacter(character)
 		end
 	end
 	local forgotInventory = ns.ForgetInventory and ns.ForgetInventory(character) or false
-	if count > 0 or forgotInventory then
+	local forgotSkills = skills[character] ~= nil
+	skills[character] = nil
+	liveDifficulty[character] = nil
+	if count > 0 or forgotInventory or forgotSkills then
 		Wipe(lastSignature)
 		NotifyChanged()
 	end
@@ -628,7 +690,8 @@ local function ReadOutput(schematic, recipeID)
 	end
 end
 
--- { name, icon, learned } of a recipe, or nil when the name or the learned flag cannot be read.
+-- { name, icon, learned, difficulty } of a recipe (difficulty = Enum.TradeskillRelativeDifficulty, nil when the client does not
+-- say), or nil when the name or the learned flag cannot be read.
 local function ReadRecipeInfo(recipeID)
 	local ok, info = pcall(C_TradeSkillUI.GetRecipeInfo, recipeID)
 	info = ok and PlainTable(info) or nil
@@ -643,7 +706,71 @@ local function ReadRecipeInfo(recipeID)
 	if IsSecret(icon) or (type(icon) ~= "number" and type(icon) ~= "string") then
 		icon = nil
 	end
-	return { name = name, icon = icon, learned = learned and true or false }
+	local difficulty = info.relativeDifficulty
+	if IsSecret(difficulty) or type(difficulty) ~= "number" or not DIFFICULTY_CATEGORIES[difficulty] then
+		difficulty = nil
+	end
+	return { name = name, icon = icon, learned = learned and true or false, difficulty = difficulty }
+end
+
+-- Saves the skill of a character in a profession ("Alchemy" or any case). Returns true when the saved rank or maximum changed.
+local function SetSavedSkill(character, profession, rank, max)
+	if not (skills and character and type(profession) == "string" and profession ~= ""
+		and IsSkillValue(rank) and IsSkillValue(max) and max > 0 and rank <= max) then
+		return false
+	end
+	local professions = skills[character]
+	if not professions then
+		professions = {}
+		skills[character] = professions
+	end
+	local key = profession:lower()
+	local entry = professions[key]
+	local changed = not entry or entry.rank ~= rank or entry.max ~= max
+	if not entry then
+		entry = {}
+		professions[key] = entry
+	end
+	entry.rank, entry.max, entry.time = rank, max, time and time() or 0
+	return changed
+end
+
+-- The skill of the open profession: its name, rank and maximum, or nil when the client does not say.
+local function ReadOpenProfessionSkill()
+	if not C_TradeSkillUI.GetBaseProfessionInfo then
+		return nil
+	end
+	local ok, info = pcall(C_TradeSkillUI.GetBaseProfessionInfo)
+	info = ok and PlainTable(info) or nil
+	local name = ProfessionNameOf(info)
+	if name and IsSkillValue(info.skillLevel) and IsSkillValue(info.maxSkillLevel) and info.maxSkillLevel > 0 then
+		return name, info.skillLevel, info.maxSkillLevel
+	end
+end
+
+-- Keeps what the open profession window says: the skill of the character, and the difficulty of each recipe (this session only,
+-- to cross-check the bundled data). Returns true when something the skill-up chances use changed.
+local function RecordProfessionWindow(character, infos)
+	local profession, rank, max = ReadOpenProfessionSkill()
+	if not profession then
+		return false
+	end
+	local changed = SetSavedSkill(character, profession, rank, max)
+	local live = liveDifficulty[character]
+	if not live then
+		live = {}
+		liveDifficulty[character] = live
+	end
+	for recipeID, info in pairs(infos) do
+		if info.difficulty ~= nil then
+			local previous = live[recipeID]
+			if not previous or previous.difficulty ~= info.difficulty or previous.skill ~= rank then
+				changed = true
+			end
+			live[recipeID] = { difficulty = info.difficulty, skill = rank }
+		end
+	end
+	return changed
 end
 
 -- Saves one recipe. Returns the profession it was saved under, or nil when nothing usable was read (including when
@@ -782,9 +909,15 @@ function ns.ScanRecipes(skipUnchanged)
 		end
 	end
 
+	-- Every scan reads the skill and the difficulties; the windows only change when those did.
+	local skillChanged = RecordProfessionWindow(character, infos)
+
 	local signatureKey = character .. "|" .. (baseProfession or "?")
 	local signature = #order .. "|" .. learnedCount
 	if skipUnchanged and lastSignature[signatureKey] == signature then
+		if skillChanged then
+			NotifyChanged()
+		end
 		return false, "unchanged"
 	end
 	lastSignature[signatureKey] = signature
@@ -815,8 +948,9 @@ function ns.ScanRecipes(skipUnchanged)
 	return true, read
 end
 
--- Professions the character has, as a set of lowercase names; nil unless the list can be read reliably.
-local function GetOwnProfessionNames()
+-- The professions the character has, as a list of { name, rank, max } (rank and max are nil when the client does not say);
+-- nil unless the list can be read reliably.
+local function ReadOwnProfessions()
 	if not (GetProfessions and GetProfessionInfo) then
 		return nil
 	end
@@ -824,35 +958,39 @@ local function GetOwnProfessionNames()
 	if not results[1] then
 		return nil
 	end
-	local names, count = {}, 0
+	local list = {}
 	for position = 2, 8 do
 		local index = results[position]
 		if index ~= nil then
 			if IsSecret(index) or type(index) ~= "number" then
 				return nil
 			end
-			local ok, name = pcall(GetProfessionInfo, index)
+			local ok, name, _, rank, max = pcall(GetProfessionInfo, index)
 			name = ok and PlainString(name) or nil
 			if not name then
 				return nil
 			end
-			names[name:lower()] = true
-			count = count + 1
+			list[#list + 1] = { name = name, rank = IsSkillValue(rank) and rank or nil, max = IsSkillValue(max) and max or nil }
 		end
 	end
 	-- No professions at all is more likely a list that has not loaded yet than a character without any.
-	if count == 0 then
+	if #list == 0 then
 		return nil
 	end
-	return names
+	return list
 end
 
--- Takes this character off the recipes of professions it no longer has.
-local function PruneStaleProfessions()
+-- Takes this character off the recipes and the skills of professions it no longer has, and saves the skill it has in the ones
+-- it does.
+local function SyncOwnProfessions()
 	local character = db and GetCharacterKey()
-	local names = character and GetOwnProfessionNames()
-	if not names then
+	local list = character and ReadOwnProfessions()
+	if not list then
 		return
+	end
+	local names = {}
+	for _, profession in ipairs(list) do
+		names[profession.name:lower()] = true
 	end
 	local changed = false
 	for recipeID, characters in pairs(knownBy) do
@@ -862,8 +1000,28 @@ local function PruneStaleProfessions()
 			changed = true
 		end
 	end
+	local saved = skills[character]
+	if saved then
+		for key in pairs(saved) do
+			if not names[key] then
+				saved[key] = nil
+				changed = true
+			end
+		end
+		if next(saved) == nil then
+			skills[character] = nil
+		end
+	end
+	local skillChanged = false
+	for _, profession in ipairs(list) do
+		if profession.rank and profession.max and SetSavedSkill(character, profession.name, profession.rank, profession.max) then
+			skillChanged = true
+		end
+	end
 	if changed then
 		Wipe(lastSignature)
+	end
+	if changed or skillChanged then
 		NotifyChanged()
 	end
 end
@@ -1093,6 +1251,212 @@ function ns.GetKnownRecipeCharacters()
 	return list
 end
 
+--------------------------------------------------------------------------------
+-- Skill-up chance
+--------------------------------------------------------------------------------
+
+-- { yellow, grey } the bundled data has for a recipe, or nil. Green is halfway between them, rounded down.
+local function GetThresholds(recipeID)
+	local entry = IsID(recipeID) and ns.RecipeThresholds and ns.RecipeThresholds[recipeID] or nil
+	if type(entry) == "table" and IsSkillValue(entry[1]) and IsSkillValue(entry[2]) and entry[1] > 0 and entry[2] >= entry[1] then
+		return entry[1], entry[2]
+	end
+end
+
+-- The chance (0 to 1) that crafting a recipe at a skill raises the skill, and the color category ("orange", "yellow", "green" or
+-- "grey") it has at that skill, then the thresholds the data has for it (yellow, green, grey; nil without data).
+--	difficulty: Enum.TradeskillRelativeDifficulty the client reported at this very skill, or nil when it is not known
+--	maxSkill: the highest skill the profession allows now, or nil; there is no skill-up at it
+-- Orange is always 100% and grey 0%; yellow and green fall linearly from 100% at the yellow skill to 0% at the grey one (the
+-- Classic rule). The chance is nil (and the category the client's) when the data and the client disagree about the color, and
+-- when only the client's color is known. Nothing is returned when the skill is unusable or neither says anything.
+function ns.GetSkillUpChance(recipeID, skill, difficulty, maxSkill)
+	if not IsSkillValue(skill) then
+		return nil
+	end
+	local yellow, grey = GetThresholds(recipeID)
+	local green = yellow and math.floor((yellow + grey) / 2) or nil
+	local live = not IsSecret(difficulty) and type(difficulty) == "number" and DIFFICULTY_CATEGORIES[difficulty] or nil
+
+	-- No skill-up at the maximum skill, whatever the recipe says.
+	if IsSkillValue(maxSkill) and maxSkill > 0 and skill >= maxSkill then
+		return 0, "grey", yellow, green, grey
+	end
+
+	local category
+	if yellow then
+		if skill < yellow then
+			category = "orange"
+		elseif skill >= grey then
+			category = "grey"
+		elseif skill < green then
+			category = "yellow"
+		else
+			category = "green"
+		end
+	end
+
+	if live == "grey" then
+		return 0, "grey", yellow, green, grey -- the client says nothing is gained, which is certain
+	elseif live == "orange" and not yellow then
+		return 1, "orange" -- orange is always a sure skill-up
+	elseif live and live ~= category then
+		return nil, live, yellow, green, grey -- no data, or data that disagrees with the client: trust the client's color only
+	elseif not category then
+		return nil
+	elseif category == "orange" then
+		return 1, category, yellow, green, grey
+	elseif category == "grey" then
+		return 0, category, yellow, green, grey
+	end
+	local chance = (grey - skill) / (grey - yellow)
+	return math.min(1, math.max(0, chance)), category, yellow, green, grey
+end
+
+-- The color of a category as r, g, b: the client's own difficulty color when it has one.
+function ns.GetSkillUpColor(category)
+	local color = DIFFICULTY_COLORS[category] or DIFFICULTY_COLORS.grey
+	local global = _G[color.global]
+	if type(global) == "table" and not IsSecret(global) then
+		local r, g, b = global.r, global.g, global.b
+		if type(r) == "number" and type(g) == "number" and type(b) == "number"
+			and not IsSecret(r) and not IsSecret(g) and not IsSecret(b) then
+			return r, g, b
+		end
+	end
+	return color.fallback[1], color.fallback[2], color.fallback[3]
+end
+
+local function ColorCode(category)
+	local r, g, b = ns.GetSkillUpColor(category)
+	local function Byte(value)
+		return math.floor(math.min(1, math.max(0, value)) * 255 + 0.5)
+	end
+	return string.format("ff%02x%02x%02x", Byte(r), Byte(g), Byte(b))
+end
+
+-- "37%" for a chance: rounded, but never 0% or 100% unless it is exactly that ("<1%", "99%").
+local function FormatChance(chance)
+	local percent = math.floor(chance * 100 + 0.5)
+	if chance > 0 and percent < 1 then
+		return "<1%"
+	elseif chance < 1 and percent > 99 then
+		return "99%"
+	end
+	return percent .. "%"
+end
+
+-- What a character's skill-up chance for a recipe is: { recipeID, character, name (as shown), isOwn, chance, category, skill,
+-- max, yellow, green, grey, live (the client's color was used) }, or nil when the character's skill in the recipe's profession is
+-- not known (or neither the data nor the client says anything about the recipe). It also works for recipes the character does
+-- not know (what the chance would be).
+function ns.GetRecipeSkillUp(recipeID, character)
+	local record = recipes and recipes[recipeID]
+	local professions = record and type(character) == "string" and skills[character] or nil
+	local saved = professions and professions[record.profession:lower()] or nil
+	if not saved then
+		return nil
+	end
+	-- The client's color only counts at the skill it was read at.
+	local live = liveDifficulty[character] and liveDifficulty[character][recipeID] or nil
+	local difficulty = live and live.skill == saved.rank and live.difficulty or nil
+	local chance, category, yellow, green, grey = ns.GetSkillUpChance(recipeID, saved.rank, difficulty, saved.max)
+	if not category then
+		return nil
+	end
+	local ownKey, ownRealm = GetCharacterKey()
+	return {
+		recipeID = recipeID, character = character, name = FormatCharacter(character, ownRealm), isOwn = character == ownKey,
+		chance = chance, category = category, skill = saved.rank, max = saved.max,
+		yellow = yellow, green = green, grey = grey, live = difficulty ~= nil,
+	}
+end
+
+-- The skill-up chance to show for a recipe: the current character's when it has the profession, else the best of the characters
+-- that know the recipe (highest chance; unknown chances last; then by name).
+function ns.GetBestRecipeSkillUp(recipeID)
+	local ownKey = GetCharacterKey()
+	local own = ownKey and ns.GetRecipeSkillUp(recipeID, ownKey) or nil
+	if own then
+		return own
+	end
+	local best
+	for character in pairs(knownBy[recipeID] or {}) do
+		local info = character ~= ownKey and ns.GetRecipeSkillUp(recipeID, character) or nil
+		if info then
+			local better = not best
+			if best then
+				local a, b = info.chance or -1, best.chance or -1
+				better = a > b or (a == b and info.character < best.character)
+			end
+			if better then
+				best = info
+			end
+		end
+	end
+	return best
+end
+
+-- "(37%)" in the color of the category ("(?)" when the chance is not known) for ns.GetRecipeSkillUp's answer; nil for no answer.
+function ns.FormatSkillUp(info)
+	if type(info) ~= "table" then
+		return nil
+	end
+	local text = "(" .. (info.chance and FormatChance(info.chance) or "?") .. ")"
+	return "|c" .. ColorCode(info.category) .. text .. "|r"
+end
+
+-- Adds the skill-up lines of ns.GetRecipeSkillUp's answer to a tooltip.
+function ns.AddSkillUpTooltip(tooltip, info)
+	if type(info) ~= "table" or not tooltip then
+		return
+	end
+	local parts = {}
+	if info.yellow then
+		parts[#parts + 1] = string.format("yellow %d, green %d, grey %d", info.yellow, info.green, info.grey)
+	end
+	parts[#parts + 1] = string.format("%s skill %d", info.isOwn and "your" or "their", info.skill)
+	local label = info.isOwn and "Skill-up chance" or ("Skill-up chance for " .. info.name)
+	local value = info.chance and FormatChance(info.chance) or "unknown"
+	local r, g, b = ns.GetSkillUpColor(info.category)
+	tooltip:AddLine(string.format("%s: %s (%s)", label, value, table.concat(parts, "; ")), r, g, b, true)
+	if info.max and info.skill >= info.max then
+		tooltip:AddLine(string.format("%s skill is at its maximum (%d); train to learn more.", info.isOwn and "Your" or "Their", info.max), 0.6, 0.6, 0.6, true)
+	elseif not info.chance and info.live then
+		tooltip:AddLine("The chance is unknown: the game's color and this addon's data do not agree.", 0.6, 0.6, 0.6, true)
+	end
+end
+
+-- Puts the skill-up text of a row after the recipe's name when both fit in `width`, else at the right end of the name's room.
+-- `name` is anchored from `left` to `right` (the region after it), `chance` is a font string; text nil hides it.
+function ns.PlaceSkillUpText(name, chance, left, right, width, text)
+	name:ClearAllPoints()
+	name:SetPoint("TOPLEFT", left, "TOPRIGHT", 6, 0)
+	if not text then
+		chance:SetText("")
+		chance:Hide()
+		name:SetPoint("RIGHT", right, "LEFT", -4, 0)
+		return
+	end
+	chance:SetText(text)
+	local function Width(fontString)
+		local ok, value = pcall(function() return fontString:GetStringWidth() end)
+		if ok and not IsSecret(value) and type(value) == "number" and value == value then
+			return value
+		end
+	end
+	local nameWidth, chanceWidth = Width(name), Width(chance)
+	chance:ClearAllPoints()
+	if nameWidth and chanceWidth and nameWidth + CHANCE_GAP + chanceWidth <= width then
+		chance:SetPoint("TOPLEFT", name, "TOPLEFT", nameWidth + CHANCE_GAP, 0)
+		name:SetPoint("RIGHT", right, "LEFT", -4, 0)
+	else
+		chance:SetPoint("TOPRIGHT", right, "TOPLEFT", -4, 0)
+		name:SetPoint("RIGHT", chance, "LEFT", -4, 0)
+	end
+	chance:Show()
+end
+
 -- The materials of one craft, for the rows: { { items = { itemID, ... }, quantity, highlight } }. Without saved slots (recipes
 -- saved before they were kept) it is one entry per ingredient sorted by name; the entry holding the looked-up item is highlighted.
 local function BuildMaterials(record, itemID)
@@ -1155,6 +1519,7 @@ function ns.GetRecipeRows(itemID)
 				knownBy = characters,
 				known = #characters > 0,
 				knownHere = knownHere,
+				skillUp = ns.GetBestRecipeSkillUp(recipeID),
 			}
 		end
 	end
@@ -1345,6 +1710,129 @@ local function FormatDetail(row)
 	return "|c" .. GREY_TEXT_COLOR .. row.profession .. "|r  " .. status
 end
 
+-- The profession filter bar of the results windows (this one and the materials window): an "All" button, then one button per
+-- profession found in the unfiltered results, sorted by name, in rows that wrap at the width given. It hides itself when
+-- the results hold fewer than two professions. The selection (nil is "All") lives with the bar, so it is kept for the session
+-- only; a profession that is gone from the results falls back to "All". Professions are compared without regard to case and
+-- labeled with the first spelling seen.
+--	options: parent (the window), left and top (where the bar starts), width (room for a row), listTop (where the list starts
+--	when there is no bar; with a bar it starts below it) and onChange (called after a click changed the selection).
+--	filter:Update(names) lays the buttons out for the professions named (duplicates allowed) and returns the distance from the
+--	top of the window to the list, which the caller sets as the top of its scroll frame (every refresh).
+--	filter:Matches(profession) tells whether a recipe of that profession passes the current selection.
+local FILTER_BUTTON_HEIGHT = 18
+local FILTER_BUTTON_MIN_WIDTH = 40
+local FILTER_BUTTON_PADDING = 16 -- added to the text width
+local FILTER_GAP_X = 4
+local FILTER_GAP_Y = 2
+local FILTER_LIST_GAP = 4 -- between the last row of buttons and the list
+
+function ns.CreateProfessionFilter(options)
+	local filter = { selected = nil, height = 0, buttons = {} }
+	local parent = options.parent
+	-- Text is measured on a font string of the buttons' font; a button's own text may not be sized yet.
+	local measure = parent:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+	measure:Hide()
+
+	local function AcquireButton(index)
+		local button = filter.buttons[index]
+		if button then
+			return button
+		end
+		button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+		button:SetHeight(FILTER_BUTTON_HEIGHT)
+		button:SetNormalFontObject("GameFontNormalSmall")
+		button:SetScript("OnClick", function(self)
+			filter.selected = self.key
+			if options.onChange then
+				options.onChange()
+			end
+		end)
+		button:SetScript("OnEnter", function(self)
+			if GameTooltip then
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				GameTooltip:SetText(self.key and ("Show only " .. self.text .. " recipes") or "Show all recipes")
+				GameTooltip:Show()
+			end
+		end)
+		button:SetScript("OnLeave", function()
+			if GameTooltip then
+				GameTooltip:Hide()
+			end
+		end)
+		filter.buttons[index] = button
+		return button
+	end
+
+	function filter:Matches(profession)
+		return self.selected == nil or (type(profession) == "string" and profession:lower() == self.selected)
+	end
+
+	function filter:Update(names)
+		-- One entry per profession, whatever the case: { key = lowercase, label = the saved spelling }
+		local found, list = {}, {}
+		for _, name in ipairs(names) do
+			if type(name) == "string" and name ~= "" then
+				local key = name:lower()
+				if not found[key] then
+					found[key] = true
+					list[#list + 1] = { key = key, label = name }
+				end
+			end
+		end
+		table.sort(list, function(a, b)
+			if a.key ~= b.key then
+				return a.key < b.key
+			end
+			return a.label < b.label
+		end)
+		-- A profession that is gone from the results, or a bar with nothing to choose from, goes back to "All".
+		if #list < 2 or (self.selected and not found[self.selected]) then
+			self.selected = nil
+		end
+
+		if #list < 2 then
+			self.height = 0
+			for _, button in ipairs(self.buttons) do
+				button:Hide()
+			end
+			return options.listTop
+		end
+
+		table.insert(list, 1, { key = nil, label = "All" })
+		local x, row = 0, 0
+		for index, item in ipairs(list) do
+			local button = AcquireButton(index)
+			local text = item.label:gsub("|", "||") -- the text of a button and a tooltip reads escape codes
+			button.key, button.text = item.key, text
+			button:SetText(text)
+			measure:SetText(text)
+			local width = math.max(FILTER_BUTTON_MIN_WIDTH, math.ceil(measure:GetStringWidth() or 0) + FILTER_BUTTON_PADDING)
+			button:SetWidth(width)
+			if x > 0 and x + width > options.width then
+				x = 0
+				row = row + 1
+			end
+			button:ClearAllPoints()
+			button:SetPoint("TOPLEFT", parent, "TOPLEFT", options.left + x, -(options.top + row * (FILTER_BUTTON_HEIGHT + FILTER_GAP_Y)))
+			x = x + width + FILTER_GAP_X
+			if item.key == self.selected then
+				button:LockHighlight()
+			else
+				button:UnlockHighlight()
+			end
+			button:Show()
+		end
+		for index = #list + 1, #self.buttons do
+			self.buttons[index]:Hide()
+		end
+		self.height = (row + 1) * FILTER_BUTTON_HEIGHT + row * FILTER_GAP_Y
+		return options.top + self.height + FILTER_LIST_GAP
+	end
+
+	return filter
+end
+
 local function AcquireRow(index)
 	local row = ui.rows[index]
 	if row then
@@ -1381,6 +1869,13 @@ local function AcquireRow(index)
 	row.name:SetHeight(14)
 	row.name:SetJustifyH("LEFT")
 	row.name:SetWordWrap(false)
+
+	-- The skill-up chance, after the name (or at the end of its room when the name is long); it brings its own colors.
+	row.chance = row.frame:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	row.chance:SetHeight(14)
+	row.chance:SetJustifyH("LEFT")
+	row.chance:SetWordWrap(false)
+	row.chance:Hide()
 
 	row.detail = row.frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
@@ -1436,6 +1931,10 @@ local function AcquireRow(index)
 				GameTooltip:AddLine(text, 1, 0.19, 0.19, true)
 			end
 		end
+		if entry.skillUp then
+			GameTooltip:AddLine(" ")
+			ns.AddSkillUpTooltip(GameTooltip, entry.skillUp)
+		end
 		-- Only when the game gave one.
 		if entry.source then
 			GameTooltip:AddLine(" ")
@@ -1461,6 +1960,13 @@ local function AcquireRow(index)
 	return row
 end
 
+-- Puts the top of the list `top` below the top of the window (it moves down with the filter bar).
+local function PlaceScroll(top)
+	ui.scroll:ClearAllPoints()
+	ui.scroll:SetPoint("TOPLEFT", window, "TOPLEFT", LIST_LEFT, -top)
+	ui.scroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -36, 36)
+end
+
 RefreshWindow = function()
 	if not ui or not ui.itemID then
 		return
@@ -1472,8 +1978,20 @@ RefreshWindow = function()
 	ui.itemIcon:SetTexture(ReadItemIcon(itemID) or QUESTION_ICON)
 	ui.itemName:SetText(itemName)
 
-	local entries = ns.GetRecipeRows(itemID)
-	RequestMaterialNames(entries)
+	local all = ns.GetRecipeRows(itemID)
+	RequestMaterialNames(all)
+	-- The filter bar offers the professions of every result; the list shows the selected one. The list moves down with the bar.
+	local professions = {}
+	for _, entry in ipairs(all) do
+		professions[#professions + 1] = entry.profession
+	end
+	PlaceScroll(ui.filter:Update(professions))
+	local entries = {}
+	for _, entry in ipairs(all) do
+		if ui.filter:Matches(entry.profession) then
+			entries[#entries + 1] = entry
+		end
+	end
 	local child = ui.scrollChild
 	child:SetWidth(LIST_WIDTH)
 	local top = 0
@@ -1488,6 +2006,7 @@ RefreshWindow = function()
 		local color = entry.known and KNOWN_NAME_COLOR or UNKNOWN_NAME_COLOR
 		row.name:SetTextColor(color[1], color[2], color[3])
 		row.qty:SetText("x" .. entry.quantity)
+		ns.PlaceSkillUpText(row.name, row.chance, row.icon, row.qty, ROW_NAME_AREA, ns.FormatSkillUp(entry.skillUp))
 		row.detail:SetText(FormatDetail(entry))
 		row.materials:SetText(FormatMaterials(entry.materials, owned))
 		-- The row is as tall as its materials need, so a long list is never cut off or drawn over the next row.
@@ -1575,8 +2094,16 @@ local function BuildWindow()
 
 	-- List. Named so the template's "$parentScrollBar" children get a unique, namespaced global name.
 	ui.scroll = CreateFrame("ScrollFrame", SCROLL_NAME, frame, "UIPanelScrollFrameTemplate")
-	ui.scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -68)
-	ui.scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 36)
+	PlaceScroll(LIST_TOP)
+
+	-- Filter bar between the header and the list; it only shows when the results hold more than one profession.
+	ui.filter = ns.CreateProfessionFilter({
+		parent = frame, left = 16, top = FILTER_TOP, width = FRAME_WIDTH - 32, listTop = LIST_TOP,
+		onChange = function()
+			ui.scroll:SetVerticalScroll(0)
+			RefreshWindow()
+		end,
+	})
 
 	ui.scrollChild = CreateFrame("Frame", nil, ui.scroll)
 	ui.scrollChild:SetSize(LIST_WIDTH, ROW_TOP_HEIGHT + MATERIALS_MIN_HEIGHT + ROW_BOTTOM_PADDING)
@@ -1613,6 +2140,7 @@ function ns.ShowRecipes(itemID)
 	BuildWindow()
 	if ui.itemID ~= itemID then
 		ui.scroll:SetVerticalScroll(0)
+		ui.filter.selected = nil -- a new item starts unfiltered
 	end
 	ui.itemID = itemID
 	if window:IsShown() then
@@ -1666,12 +2194,17 @@ function ns.GetRecipeItemName(name, profession)
 	return prefix .. ": " .. name
 end
 
--- Page of the recipe's spell (nil without a recipe ID), a search for the item that teaches it (its plain name when the
--- profession has no known prefix) and whether that search is for the item's name.
+-- Page of the recipe's spell (nil without a recipe ID), the page of the item that teaches it when the bundled data knows it
+-- (Data/RecipeData.lua) or else a search for that item (its plain name when the profession has no known prefix), whether that
+-- is a search for the item's name, and the ID of the teaching item (nil when it is not known).
 function ns.GetWowheadUrls(recipeID, name, profession)
 	local spellUrl
 	if IsID(recipeID) then
 		spellUrl = WOWHEAD_BASE .. "spell=" .. string.format("%d", recipeID)
+	end
+	local teacher = IsID(recipeID) and ns.RecipeTeachers and ns.RecipeTeachers[recipeID] or nil
+	if IsID(teacher) then
+		return spellUrl, WOWHEAD_BASE .. "item=" .. string.format("%d", teacher), false, teacher
 	end
 	local itemName = ns.GetRecipeItemName(name, profession)
 	return spellUrl, WOWHEAD_BASE .. "search?q=" .. ns.EncodeUrlText(itemName or name), itemName ~= nil
@@ -1765,7 +2298,7 @@ local function BuildLinkPopup()
 	linkUI.name:SetJustifyH("LEFT")
 	linkUI.name:SetWordWrap(false)
 
-	-- The search comes first (it is the one selected); the spell page of the recipe is below it.
+	-- The recipe item (its page or a search) comes first (it is the one selected); the spell page of the recipe is below it.
 	linkUI.searchLabel = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	linkUI.searchBox = CreateLinkBox(frame)
 	linkUI.pageLabel = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
@@ -1786,17 +2319,17 @@ local function BuildLinkPopup()
 	end)
 end
 
--- Shows the links of a recipe: a search for the item that teaches it (by the plain recipe name when the profession has no
--- known prefix) and the page of its spell. Without a usable recipe ID only the search link is shown.
+-- Shows the links of a recipe: the page of the item that teaches it when it is known, else a search for it (by the plain
+-- recipe name when the profession has no known prefix), and the page of its spell. Without a usable recipe ID only the search link is shown.
 function ns.ShowWowheadLinks(recipeID, name, profession)
 	BuildLinkPopup()
-	local spellUrl, searchUrl, itemSearch = ns.GetWowheadUrls(recipeID, name, profession)
+	local spellUrl, searchUrl, itemSearch, teacher = ns.GetWowheadUrls(recipeID, name, profession)
 	local ui = linkUI
 
 	ui.name:SetText(StripColors(name))
 
 	ui.pageBox.url, ui.searchBox.url = spellUrl, searchUrl
-	ui.searchLabel:SetText(itemSearch and "Recipe item (search)" or "Search")
+	ui.searchLabel:SetText(teacher and "Recipe item" or (itemSearch and "Recipe item (search)" or "Search"))
 	ui.searchLabel:ClearAllPoints()
 	ui.searchLabel:SetPoint("TOPLEFT", linkPopup, "TOPLEFT", 16, -48)
 	ui.searchBox:ClearAllPoints()
@@ -2080,7 +2613,7 @@ function ns.InitRecipes(database)
 		elseif event == "TRADE_SKILL_SHOW" or event == "TRADE_SKILL_DATA_SOURCE_CHANGED" or event == "NEW_RECIPE_LEARNED" then
 			ScheduleScan(true)
 		elseif event == "PLAYER_LOGIN" or event == "SKILL_LINES_CHANGED" then
-			PruneStaleProfessions()
+			SyncOwnProfessions()
 		elseif event == "ITEM_DATA_LOAD_RESULT" then
 			OnItemDataLoaded((...))
 		elseif event == "BAG_UPDATE_DELAYED" then

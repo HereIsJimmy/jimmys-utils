@@ -147,16 +147,24 @@ saved before the slots were kept list their ingredients by name instead. An item
 `item:<id>` and is filled in, and the window refreshed, as soon as the client reports it. The row grows to fit a long list, so
 nothing is cut off. Recipes somebody knows come first, then the rest sorted by profession and name. Hovering a row shows the
 tooltip of the item the recipe makes (or of the recipe itself when it makes no item), followed by the materials, the list of
-characters that know it and, only when the game gave one, the "Where to get it" text. The footer shows how many recipes are saved
+characters that know it, the skill-up chance, and, only when the game gave one, the "Where to get it" text. The footer shows how many recipes are saved
 and from which professions.
 
+After a recipe's name the row shows its **skill-up chance**, for example `(88%)`, in the official difficulty colors: orange when it is
+a sure skill-up (100%), yellow, green, and grey (0%). It is the chance for the character you are playing when it has that
+profession (also for recipes it does not know yet, which tells you what it would be), otherwise for the character that knows the recipe
+and has the best chance; the tooltip names that character. Nothing is shown while no character with the profession has been seen
+(the skill is saved at login and when you open the profession window).
+
 Every row has a small **Wowhead** button. The client cannot open web pages, so it opens a small window titled "Wowhead links" with
-the recipe's name and two boxes to copy from. An addon cannot ask which item teaches a recipe, so the first box, **Recipe item
-(search)**, is a Wowhead search for that item's name, which is the profession's prefix plus the recipe name
+the recipe's name and two boxes to copy from. When the bundled data knows which item teaches the recipe (see [Skill-up chance and
+recipe items](#skill-up-chance-and-recipe-items)) the first box, **Recipe item**, is the exact page of that item
+(`https://www.wowhead.com/forever/item=<item ID>`). Otherwise an addon cannot ask which item teaches a recipe, so the first box,
+**Recipe item (search)**, is a Wowhead search for that item's name, which is the profession's prefix plus the recipe name
 (`https://www.wowhead.com/forever/search?q=Recipe%3A+Minor+Healing+Potion`, with spaces as `+` and other characters
 percent-encoded). The second box, **Recipe spell**, is the page of the recipe's spell
 (`https://www.wowhead.com/forever/spell=<recipe ID>`). Recipes taught by a trainer have no item, so use the spell page for those.
-The prefixes are:
+The prefixes (used only for the search) are:
 
 | Profession | Prefix |
 |---|---|
@@ -178,6 +186,10 @@ address is the `WOWHEAD_BASE` constant and the prefixes are the `RECIPE_ITEM_PRE
 recipe tracker uses). This works only for recipes the character you are playing knows; the row's tooltip says
 "Double-click to open it in your profession window." on those. For other recipes a chat line says who knows it.
 
+**Profession filter.** When the results hold recipes of more than one profession, a row of small buttons appears above the list
+(**All** and one per profession, wrapping onto more rows when they do not fit); click one to list only that profession's recipes. The choice
+is kept until you close the game and goes back to **All** when its profession is not in the results of the next lookup.
+
 **Recipes nobody knows.** They only show up if the client gives addons recipes the character has not learned.
 Forever's own profession window hides them, so it may be that every recipe the addon sees is already known by the character
 that scanned it. Recipes that another character knows always show `Known: <name>`. To find out what your client does, open a
@@ -187,6 +199,34 @@ window, how many recipes `GetAllRecipeIDs` and `GetFilteredRecipeIDs` return and
 The **Recipes** tab explains this, shows the current key (or how to set one), the number of saved recipes per profession, and has
 a **Forget saved recipes** button (it asks for a second click). Saved recipes are listed under Saved data below. A character that
 drops a profession is taken off the recipes of that profession when the game reports its professions (at login and when skills change).
+
+#### Skill-up chance and recipe items
+
+The game does not tell addons the chance of a skill-up, only the colour of a recipe (orange, yellow, green or grey). Jimmy's Utils
+bundles the thresholds of every profession recipe, taken from the game's own data, and uses the Classic rule: below the yellow skill
+a recipe is orange and always gives a skill-up; from the yellow skill to the grey skill the chance falls in a straight line from 100%
+to 0% (`(grey - skill) / (grey - yellow)`; green is halfway between yellow and grey, rounded down); from the grey skill on it is 0%.
+There is no skill-up at the profession's maximum skill, so a profession at its maximum shows 0%. For example Minor Healing Potion
+(yellow 55, green 75, grey 95) at skill 60 shows `(88%)` in yellow, at skill 75 `(50%)` in green and at skill 95 `(0%)` in grey.
+The percentage is rounded, but is never shown as 0% or 100% unless it is exactly that (`<1%`, `99%`).
+
+Each character's skill in each profession is saved account-wide (`recipeSkill`): from the profession window when you open it and from the
+skill list at login and whenever a skill changes, so the chance follows a skill-up while the window is open. While the profession window is
+open the game's own colour of each recipe is also used as a cross-check: when the table and the game disagree about the colour (for example
+the game says orange but the table says yellow), the game's colour is used and the number is replaced by `(?)`. The same happens for a
+recipe the table has no thresholds for, when the game's colour is known. With neither, nothing is shown. The tooltip line reads, for example,
+`Skill-up chance: 88% (yellow 55, green 75, grey 95; your skill 60)`.
+
+The same data names the item that teaches each recipe (the lowest item ID when several do), which is what the **Recipe item** box of the
+Wowhead window shows. Recipes taught by a trainer have no item and keep the search.
+
+**Data source.** `Data/RecipeData.lua` is generated and must not be edited. It holds `ns.RecipeThresholds[spellID] = { yellow, grey }` and
+`ns.RecipeTeachers[spellID] = itemID` (the recipe ID the profession window uses is the spell ID), taken from the SkillLineAbility,
+ItemXItemEffect and ItemEffect tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
+Blizzard's game data; this addon is not affiliated with or endorsed by Blizzard. To regenerate it for a newer client build, change the `BUILD`
+constant in `tools/gen_recipe_data.py` and run, from the addon folder, `python -I tools/gen_recipe_data.py` (Python 3, standard library only;
+`--cache <folder>` keeps the downloaded CSV files, `--refresh` downloads them again). The script refuses to write the file if it no longer
+finds the known recipes it checks against.
 
 ### Per-stat breakdown
 
@@ -207,6 +247,10 @@ line per ingredient:
 Silverleaf  3/5 (2 in mail) - need 2 more
 ```
 
+After the recipe's name the header shows the **skill-up chance** of the character the group is about, for example `(88%)`, in the
+official difficulty colors (orange 100%, yellow, green, grey 0%); see [Skill-up chance and recipe items](#skill-up-chance-and-recipe-items).
+Nothing is shown when that character's skill in the profession has not been saved yet. The header's tooltip has the numbers.
+
 `3/5` is what the character has against what one craft needs. A line is red while something is missing and green when there is enough.
 `(COD)` marks ingredients that come in a letter with a cash on delivery request. An ingredient that comes in several interchangeable items
 (for example the quality tiers of an herb) is one line, marked `(any quality)`: what the character has of all of them is added up against the
@@ -214,6 +258,10 @@ quantity the recipe needs, as in the game's own recipe tracker, and the name sho
 version have one line per item until their profession window is opened again. Within a character, craftable recipes come first, then the
 ones with the fewest missing items, then by name. Double-click a recipe's header to open it in your profession window (only recipes of the
 current character: for another character's recipe the chat says who knows it; log in to that character to craft it).
+
+When the recipes shown belong to more than one profession, a row of **profession buttons** (**All** and one per profession) sits above the
+list; click one to see only that profession's recipes in every character's group (a character with none is hidden). The choice is kept for
+the session and goes back to **All** when its profession leaves the list, for example after turning **Show other characters** off.
 
 What counts for each character:
 
@@ -244,7 +292,7 @@ The check box **Show other characters** at the top of the window (saved, on by d
   character's data is only as fresh as its last visit. Items you mail to one of your other characters (a recipient written as `Name` or
   `Name-Realm`, in any case, on the current realm) are added to that character's saved mailbox when the game confirms the letter; the
   character's next scan of its own mailbox replaces everything.
-- **Forgetting a character.** `/ju recipes forget <character>` removes the character's recipes together with its saved bags, bank and
+- **Forgetting a character.** `/ju recipes forget <character>` removes the character's recipes together with its saved profession skills, bags, bank and
   mailbox. Characters that are not saved as knowing a recipe are not listed anyway.
 - **More than 50 letters.** The client lists at most 50 letters at a time; the window then says "Only the first 50 mails are scanned; take some
   mail to see the rest."
@@ -273,6 +321,21 @@ is open) with that list:
 The **Mail** tab has an **Enable mail features (recent recipients and mail materials)** check box, the master switch of both mail
 features (while it is off the panel is hidden, no recipients are recorded and the mailbox is not scanned for materials; what was saved is
 kept), and a **Clear recent recipients** button, which empties the list of the current realm.
+
+### Mailbox buttons
+
+Two small buttons are added to Blizzard's mailbox. Both are shown only while the mail features are on (they appear or disappear at once when
+you switch them with `/ju mail on` / `off` or the check box).
+
+- **Take all** sits at the bottom left of the open letter window, on the row of Blizzard's **Reply**, **Delete** and **Close** buttons (which fill
+  the right side, so there is no overlap). It takes every item and all the money of the open letter in one click, like shift-clicking the letter
+  in the inbox. It is disabled when the letter has nothing to take, and when the letter asks for **cash on delivery**: a click then (or a
+  letter whose cash on delivery amount the game hides) takes nothing and says "This letter asks for cash on delivery; take its items one by
+  one to pay." Hover it for its tooltip; on a cash on delivery letter it explains why it is disabled. It follows the letter that is open and
+  the inbox updates, so it greys out once the letter has been emptied.
+- **Materials** is a small button with the addon's icon in the title bar of the mailbox, just left of its close button. It shows on both the
+  **Inbox** and the **Send Mail** tab, opens or closes the **Materials in your mail** window exactly like `/ju materials`, and has the tooltip
+  "Materials in your mail" (recipes your characters know that use items in your mail). The window still never opens by itself.
 
 ## Slash commands
 
@@ -360,6 +423,15 @@ Stats with a weight of 0 do not contribute. The tooltip line is hidden for items
   `MailFrame` and follows `SendMailFrame` with `HookScript` on `OnShow` / `OnHide`; filling the "To:" box is a plain `SetText` on
   `SendMailNameEditBox`; focus and cursor are never changed. The panel re-anchors to `OpenMailFrame` while a letter is open. A recipient that is a secret value is ignored, never compared or concatenated. `MailFrame` belongs to
   `Blizzard_MailFrame`, which is always loaded; if it is not there when the addon starts, the panel is created when that addon loads.
+- **Mailbox buttons (Mail.lua).** Both are plain child frames created by the addon: "Take all" (`UIPanelButtonTemplate`, 76x22, `BOTTOMLEFT` 6, 4 of
+  `OpenMailFrame`, to the left of Blizzard's Reply button, which starts 88 px from the left edge) and the materials icon (20x20, `RIGHT` of
+  `MailFrame.CloseButton` with x -2; fallback `MailFrameCloseButton`, then the top right corner of `MailFrame`). They are created when the mailbox exists (at
+  load, at `ADDON_LOADED` "Blizzard_MailFrame" and at `MAIL_SHOW` for a letter frame that appears later) and are shown or hidden by `ns.SetMailEnabled`. Blizzard's code
+  is only touched with `HookScript` (`OpenMailFrame` `OnShow`) and `hooksecurefunc(OpenMailFrame, "Update", ...)` (a post-hook, run when another letter is
+  opened while one is showing); the button also listens to `MAIL_INBOX_UPDATE` while visible. The open letter is `InboxFrame.openMailID`; the state is read
+  with `pcall(GetInboxHeaderInfo, index)` (money, cash on delivery amount and item count; a secret money or item count counts as something to take, a secret
+  or missing cash on delivery amount as cash on delivery) and a click calls `pcall(AutoLootMailItem, index)` only when the letter is not cash on delivery, the same
+  condition Blizzard uses for shift-click. The materials button calls `ns.HandleMaterialsCommand("")`.
 - **Recipe materials in your mail.** Every `MAIL_INBOX_UPDATE` (it fires repeatedly) reads the inbox at once and replaces the snapshot, so the last state
   before the mailbox closes is never lost; only the refresh of an open window waits half a second after the last one. Nothing is read
   after `MAIL_CLOSED`, and nothing before the first `MAIL_SHOW` (so after a `/reload` at an open mailbox it starts working at the next visit). It reads `GetInboxNumItems()` (the second result, the total, tells when there are more letters than listed),
@@ -421,6 +493,11 @@ A quick first session:
    should list that name afterwards (not before the mail went out, and not for a letter that failed, for example with a full
    mailbox). Click the name to fill in the "To:" box (also while a letter is open: check the panel does not cover it), right-click it to remove it, and check `/ju mail off` (the panel disappears, new recipients are not recorded, `/ju materials` says the mail features are off),
    `/ju mail on` and `/ju mail clear`.
+   Mailbox buttons: open the mailbox and check the small icon button just left of its close button on both tabs (tooltip "Materials in your mail"; a click
+   opens and closes the materials window like `/ju materials`, and nothing opens by itself). Open a letter with items or money: **Take all** at the bottom left of the letter
+   window must not overlap Reply, Delete or Close, and takes everything in one click; open an empty letter (it is greyed out) and a cash on delivery letter (greyed out,
+   tooltip explains why; nothing is taken). Open another letter while one is open (the button follows), take the items by hand (it greys out), and check `/ju mail off` hides
+   both buttons at once and `/ju mail on` brings them back.
    Also try each feature's off switch (`/ju stats off`, `/ju range`, `/ju recipes off`, `/ju mail off`, or the check boxes) and `/ju status`.
 10. Recipe materials: open your profession windows once on each character, and open the bank (and the account bank) once on each, then send one of your characters a letter holding an ingredient of a recipe it knows (or
     use mail you already have). Log in on another character of the same realm: `/ju materials` should list it under its own header with `bags ... ago, bank ... ago`, and with the
@@ -431,7 +508,11 @@ A quick first session:
 11. Minimap button: check the icon looks right in the border, that dragging moves it around the minimap (and the position survives `/reload`),
     left-click toggles the options window, right-click the materials window, the tooltip text, `/ju minimap` and `/ju minimap reset`, the
     check box at the bottom of the options window, and the entry (icon and tooltip) in the minimap's addon compartment menu.
-12. On a non-English client the "Equip:" fallback is off; note which effects only appear as "Equip:" text.
+12. Skill-up chances: open a profession window, then `/ju recipes <an ingredient>`. Recipes should show `(NN%)` after their name in the
+    window's colors (compare them with the colors in the profession window itself), and the tooltip should read `Skill-up chance: ...`.
+    Craft something until the skill goes up with the lookup window open: the chance follows. Check a recipe whose item you know (the
+    Wowhead window's first box should be `item=...`), and one taught by a trainer (it keeps the search).
+13. On a non-English client the "Equip:" fallback is off; note which effects only appear as "Equip:" text.
 
 ## Files
 
@@ -439,7 +520,9 @@ A quick first session:
 - `Core.lua` - saved variables, profiles, weights, settings, the stat weights on/off, slash commands (including `/ju status` and `/ju stats`)
 - `Tooltip.lua` - stat collection, scoring and the tooltip line
 - `RangeCheck.lua` - the range check indicator, its settings and the `/ju range` command
-- `Recipes.lua` - recipe scanning and saved data, item lookup, the results window, the key binding function and `/ju recipes`
+- `Recipes.lua` - recipe scanning and saved data, the skill-up chance, item lookup, the results window, the key binding function and `/ju recipes`
+- `Data/RecipeData.lua` - generated: the skill thresholds and teaching item of every profession recipe (Blizzard's game data via wago.tools)
+- `tools/gen_recipe_data.py` - the generator of `Data/RecipeData.lua` (not loaded by the game)
 - `Mail.lua` - the recent mail recipients: capture, saved list, the panel next to the mailbox and `/ju mail`
 - `Inventory.lua` - the saved bags, bank, account bank and mailbox of each character, and mail sent to your own characters
 - `MailMaterials.lua` - the recipe materials in your mail: inbox scan, the window (grouped by character) and `/ju materials`
@@ -452,7 +535,7 @@ A quick first session:
 
 Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, last tab, and the
 saved recipes: `recipes`, `recipeKnownBy` with the characters that know each recipe as `Name-Realm`, and `itemNames` with the names
-of ingredients; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
+of ingredients, and `recipeSkill` with each character's rank and maximum in each profession; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
 the materials window and `showOthers`; `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
 (with the times they were seen), and `accountBank` with the account bank's items; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the active profile, and the range check spell; older versions also kept `mailItems`, the last scan of the mailbox, here: it is moved into `inventory` at load). The variable names are unchanged from the
 addon's previous name, but the client stores them in a file named after the addon folder, i.e. now

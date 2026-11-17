@@ -1147,7 +1147,7 @@ local function BuildMailPage(page)
 	ui.mailEnable = CreateToggle(page, "Enable mail features (recent recipients and mail materials)", 12, -32, function(checked)
 		SetMailStatus(nil)
 		ns.SetMailEnabled(checked)
-	end, "Switches both mail features: the panel with the last 10 characters you sent mail to, next to the Send Mail tab of the mailbox, and the scan of your mailbox for recipe materials (/ju materials). Off records and scans nothing, hides the panel and closes the materials window.")
+	end, "Switches both mail features: the panel with the last 10 characters you sent mail to, next to the Send Mail tab of the mailbox, and the scan of your mailbox for recipe materials (/ju materials). Off records and scans nothing, hides the panel and the Take all and Materials buttons of the mailbox, and closes the materials window.")
 
 	ui.mailCount = page:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	ui.mailCount:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -70)

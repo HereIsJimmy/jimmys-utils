@@ -17,7 +17,7 @@ local addonName, ns = ...
 		stats = { enabled }, -- show the stat weight score on item tooltips (the profile editing always works)
 		range = { enabled, locked, size, anchor, point, x, y }, -- validated in RangeCheck.lua
 		recipeLookup = { enabled }, -- scan professions and answer the recipe lookup, validated in Recipes.lua
-		recipes, recipeKnownBy, itemNames, -- saved recipes, validated in Recipes.lua
+		recipes, recipeKnownBy, itemNames, recipeSkill, -- saved recipes and the profession skill per character, validated in Recipes.lua
 		mail = { enabled }, -- master switch of the recent recipients and the mail materials, validated in Mail.lua
 		mailRecipients = { [realmKey] = { names } }, -- recent mail recipients, validated in Mail.lua
 		mailMaterials = { position, showOthers }, -- the "materials in your mail" window, validated in MailMaterials.lua

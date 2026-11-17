@@ -20,6 +20,12 @@ local addonName, ns = ...
 	The panel (parented to MailFrame, anchored to its right side, or to the right side of OpenMailFrame while a letter
 	is open, which sits there) is shown only while the Send Mail tab (SendMailFrame) is shown and the feature is enabled. MailFrame lives in Blizzard_MailFrame, which is always loaded; ADDON_LOADED is
 	watched anyway in case it is not there yet when the addon starts.
+
+	Two small buttons live on Blizzard's frames (insecure child frames; only HookScript and hooksecurefunc touch Blizzard's code):
+	"Take all" at the bottom left of the open letter (OpenMailFrame), which takes every item and the money of the letter with
+	AutoLootMailItem exactly like shift-clicking it in the inbox, and never for a cash on delivery letter; and a small icon in
+	the title bar of the mailbox, just left of its close button, that opens or closes the materials window like /ju materials.
+	Both follow the mail features switch at once.
 ]]
 
 local FRAME_NAME = "JimmysUtilsMailRecentFrame"
@@ -259,7 +265,7 @@ function ns.IsMailEnabled()
 	return settings ~= nil and settings.enabled == true
 end
 
-local UpdateVisibility -- defined below
+local UpdateVisibility, UpdateButtons -- defined below
 
 function ns.SetMailEnabled(enabled)
 	if not settings or type(enabled) ~= "boolean" then
@@ -267,6 +273,7 @@ function ns.SetMailEnabled(enabled)
 	end
 	settings.enabled = enabled
 	UpdateVisibility()
+	UpdateButtons()
 	-- The mail materials follow the same switch (they close, or catch up with an open mailbox).
 	if ns.OnMailEnabledChanged then
 		ns.OnMailEnabledChanged(enabled)
@@ -408,9 +415,188 @@ local function CreatePanel()
 	panel.empty:SetText("No recipients yet.")
 end
 
--- Builds the panel and follows the Send Mail tab. Returns true once that is done (also when it already was).
+--------------------------------------------------------------------------------
+-- Mailbox buttons: "Take all" in the open letter and "Materials" in the mailbox title bar
+--------------------------------------------------------------------------------
+
+local MATERIALS_ICON = "Interface\\AddOns\\JimmysUtils\\Media\\MinimapIcon"
+local MATERIALS_HIGHLIGHT = "Interface\\Buttons\\ButtonHilight-Square"
+local MATERIALS_BUTTON_SIZE = 20
+local TAKE_ALL_WIDTH = 76 -- Blizzard's Reply, Delete and Close buttons fill the bottom right of the letter; this fits to their left
+local TAKE_ALL_HEIGHT = 22
+local COD_MESSAGE = "This letter asks for cash on delivery; take its items one by one to pay."
+
+local takeAllButton, materialsButton -- nil until the frames exist
+
+-- The open letter as index, state: state is "cod" (cash on delivery, or unknown), "empty" (no items, no money) or "ready"
+-- (something to take). Nil when no letter is open. GetInboxHeaderInfo returns icon, stationery, sender, subject, money,
+-- CODAmount, daysLeft, itemCount; a secret money or item count counts as something to take, a secret COD as cash on delivery.
+local function ReadOpenLetter()
+	local index = InboxFrame and InboxFrame.openMailID
+	if IsSecret(index) or type(index) ~= "number" or index < 1 or index ~= math.floor(index)
+		or type(GetInboxHeaderInfo) ~= "function" then
+		return nil
+	end
+	local ok, _, _, _, _, money, cod, _, itemCount = pcall(GetInboxHeaderInfo, index)
+	if not ok or (money == nil and cod == nil and itemCount == nil) then
+		return nil
+	end
+	if IsSecret(cod) or type(cod) ~= "number" or cod > 0 then
+		return index, "cod"
+	end
+	local hasMoney = IsSecret(money) or (type(money) == "number" and money > 0)
+	local hasItems = IsSecret(itemCount) or (type(itemCount) == "number" and itemCount > 0)
+	return index, (hasMoney or hasItems) and "ready" or "empty"
+end
+
+local function RefreshTakeAll()
+	if takeAllButton then
+		local _, state = ReadOpenLetter()
+		takeAllButton:SetEnabled(state == "ready")
+	end
+end
+
+-- The same as shift-clicking the letter in the inbox (Blizzard skips cash on delivery letters there too).
+local function TakeAll()
+	if not (settings and settings.enabled) then
+		return
+	end
+	local index, state = ReadOpenLetter()
+	if not index then
+		return
+	end
+	if state == "cod" then
+		ns.Print(COD_MESSAGE)
+	elseif state == "ready" and type(AutoLootMailItem) == "function" then
+		pcall(AutoLootMailItem, index)
+	end
+end
+
+local function HideTooltip()
+	if GameTooltip then
+		GameTooltip:Hide()
+	end
+end
+
+local function ShowTakeAllTooltip(self)
+	if not GameTooltip then
+		return
+	end
+	local _, state = ReadOpenLetter()
+	GameTooltip:SetOwner(self, "ANCHOR_TOP")
+	GameTooltip:SetText("Take all items and money from this letter.", 1, 1, 1, 1, true)
+	if state == "cod" then
+		GameTooltip:AddLine("Disabled: " .. COD_MESSAGE, 1, 0.5, 0.5, true)
+	elseif state ~= "ready" then
+		GameTooltip:AddLine("There is nothing to take in this letter.", 0.8, 0.8, 0.8, true)
+	end
+	GameTooltip:Show()
+end
+
+local function ShowMaterialsTooltip(self)
+	if not GameTooltip then
+		return
+	end
+	GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+	GameTooltip:SetText("Materials in your mail", 1, 1, 1)
+	GameTooltip:AddLine("Recipes your characters know that use items in your mail. (/ju materials)", 0.8, 0.8, 0.8, true)
+	GameTooltip:Show()
+end
+
+-- At the bottom left of the open letter: the attachments sit above this row, and Reply, Delete and Close fill it from
+-- the right (Reply starts 88 px from the left edge, so 6 + 76 leaves a gap).
+local function CreateTakeAllButton()
+	local button = CreateFrame("Button", nil, OpenMailFrame, "UIPanelButtonTemplate")
+	button:SetSize(TAKE_ALL_WIDTH, TAKE_ALL_HEIGHT)
+	button:SetPoint("BOTTOMLEFT", OpenMailFrame, "BOTTOMLEFT", 6, 4)
+	button:SetText("Take all")
+	button:SetScript("OnClick", TakeAll)
+	button:SetScript("OnEnter", ShowTakeAllTooltip)
+	button:SetScript("OnLeave", HideTooltip)
+	button:RegisterEvent("MAIL_INBOX_UPDATE")
+	button:SetScript("OnEvent", function(self)
+		if self:IsVisible() then
+			RefreshTakeAll()
+		end
+	end)
+	takeAllButton = button
+	OpenMailFrame:HookScript("OnShow", RefreshTakeAll)
+	-- Opening another letter while one is open changes the letter without showing the frame again.
+	if hooksecurefunc and type(rawget(OpenMailFrame, "Update")) == "function" then
+		hooksecurefunc(OpenMailFrame, "Update", RefreshTakeAll)
+	end
+end
+
+-- In the title bar, just left of the close button (the centered title text is far shorter than the bar).
+local function CreateMaterialsButton()
+	local button = CreateFrame("Button", nil, MailFrame)
+	button:SetSize(MATERIALS_BUTTON_SIZE, MATERIALS_BUTTON_SIZE)
+	local close = MailFrame.CloseButton or MailFrameCloseButton
+	if close then
+		button:SetPoint("RIGHT", close, "LEFT", -2, 0)
+		button:SetFrameLevel(close:GetFrameLevel())
+	else
+		button:SetPoint("TOPRIGHT", MailFrame, "TOPRIGHT", -26, -2)
+		button:SetFrameLevel(MailFrame:GetFrameLevel() + 10)
+	end
+
+	local icon = button:CreateTexture(nil, "ARTWORK")
+	icon:SetAllPoints(button)
+	icon:SetTexture(MATERIALS_ICON)
+
+	local highlight = button:CreateTexture(nil, "HIGHLIGHT")
+	highlight:SetAllPoints(button)
+	highlight:SetTexture(MATERIALS_HIGHLIGHT)
+	highlight:SetBlendMode("ADD")
+
+	button:SetScript("OnClick", function()
+		if ns.HandleMaterialsCommand then
+			ns.HandleMaterialsCommand("") -- the same as /ju materials
+		end
+	end)
+	button:SetScript("OnEnter", ShowMaterialsTooltip)
+	button:SetScript("OnLeave", HideTooltip)
+	materialsButton = button
+end
+
+-- Both buttons are up while the mail features are on (each one hides with its frame).
+function UpdateButtons()
+	local on = settings ~= nil and settings.enabled == true
+	if materialsButton then
+		materialsButton:SetShown(on)
+	end
+	if takeAllButton then
+		takeAllButton:SetShown(on)
+		if on then
+			RefreshTakeAll()
+		end
+	end
+end
+
+-- Creates the buttons whose frames exist (the open letter may not be there yet when the mailbox is).
+local function AttachButtons()
+	if not materialsButton and MailFrame then
+		CreateMaterialsButton()
+	end
+	if not takeAllButton and OpenMailFrame then
+		CreateTakeAllButton()
+	end
+	UpdateButtons()
+end
+
+-- The two buttons (take all, materials), for tests.
+function ns.GetMailButtons()
+	return takeAllButton, materialsButton
+end
+
+--------------------------------------------------------------------------------
+-- Attaching to the mailbox
+--------------------------------------------------------------------------------
+
+-- Builds the panel and the buttons and follows the Send Mail tab. Returns true once that is done (also when it already was).
 local function Attach()
 	if panel then
+		AttachButtons()
 		return true
 	end
 	if not (MailFrame and SendMailFrame) then
@@ -423,6 +609,7 @@ local function Attach()
 		OpenMailFrame:HookScript("OnShow", UpdateAnchor)
 		OpenMailFrame:HookScript("OnHide", UpdateAnchor)
 	end
+	AttachButtons()
 	UpdateVisibility()
 	return true
 end

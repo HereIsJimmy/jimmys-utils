@@ -31,6 +31,14 @@ local addonName, ns = ...
 	interchangeable (quality tiers) and together must reach the slot's quantity. Item names come from ns.GetItemName, and a
 	double-click on a recipe uses ns.OpenRecipeInProfession (it only opens recipes of the current character).
 
+	Each recipe also shows the chance that crafting it raises that character's skill, "(NN%)" in the official difficulty colors
+	(ns.GetRecipeSkillUp, Recipes.lua); nothing while the character's skill in the profession is not known.
+
+	Profession filter: when the recipes shown (after "Show other characters") belong to more than one profession, a button bar
+	(ns.CreateProfessionFilter, Recipes.lua) offers "All" and one button per profession; a click lists only that profession's
+	recipes in every character's group, and a group left with none is hidden. The selection is kept for the session (not saved)
+	and falls back to "All" when the profession leaves the results.
+
 	The window opens only with /ju materials (a toggle); a scan never opens it. It follows the mail and the bags while it is open.
 
 	The mail features have one switch (JimmysStatWeightsDB.mail.enabled, see Mail.lua): while it is off the inbox is not scanned,
@@ -43,11 +51,15 @@ local SCROLL_NAME = "JimmysUtilsMailMaterialsScroll"
 local FRAME_WIDTH = 420
 local FRAME_HEIGHT = 416
 local LIST_WIDTH = 356 -- scroll frame width (frame minus margins and the scroll bar)
+local LIST_LEFT = 14
+local LIST_TOP = 86 -- where the list starts below the top of the window; with the profession filter bar it starts below that
+local FILTER_TOP = 86 -- where the filter bar starts (below the header controls)
 local HEADER_HEIGHT = 34
 local HEADER_ICON_SIZE = 28
 local LINE_HEIGHT = 14
 local BLOCK_GAP = 10
 local STATUS_WIDTH = 120
+local NAME_AREA_WIDTH = LIST_WIDTH - (2 + HEADER_ICON_SIZE + 6) - (4 + STATUS_WIDTH + 4) -- where a recipe name and its skill-up chance fit
 local GROUP_TITLE_HEIGHT = 15 -- a character's name; the line under it about what is known of its items follows (as tall as its text)
 local GROUP_INFO_MIN_HEIGHT = 12
 local GROUP_INFO_GAP = 6
@@ -366,6 +378,7 @@ local function BuildEntries(recipes, who, cache)
 				missing = missingTotal,
 				craftable = missingTotal == 0,
 				needsMail = missingTotal == 0 and needsMail,
+				skillUp = ns.GetRecipeSkillUp and ns.GetRecipeSkillUp(recipe.recipeID, who.key) or nil,
 				reagents = reagents,
 			}
 		end
@@ -594,6 +607,13 @@ local function AcquireBlock(index)
 	block.name:SetJustifyH("LEFT")
 	block.name:SetWordWrap(false)
 
+	-- The skill-up chance of the character the group is about, after the name (see ns.PlaceSkillUpText).
+	block.chance = block.header:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	block.chance:SetHeight(14)
+	block.chance:SetJustifyH("LEFT")
+	block.chance:SetWordWrap(false)
+	block.chance:Hide()
+
 	block.profession = block.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	block.profession:SetPoint("TOPLEFT", block.name, "BOTTOMLEFT", 0, -2)
 	block.profession:SetPoint("RIGHT", block.header, "RIGHT", -4, 0)
@@ -613,6 +633,9 @@ local function AcquireBlock(index)
 			pcall(GameTooltip.SetSpellByID, GameTooltip, entry.recipeID)
 		end
 		GameTooltip:AddLine(" ")
+		if entry.skillUp and ns.AddSkillUpTooltip then
+			ns.AddSkillUpTooltip(GameTooltip, entry.skillUp)
+		end
 		if entry.isOwn then
 			GameTooltip:AddLine("Double-click to open it in your profession window.", 0.6, 0.8, 1, true)
 		else
@@ -678,6 +701,13 @@ local function AcquireGroup(index)
 	return group
 end
 
+-- Puts the top of the list `top` below the top of the window (it moves down with the filter bar).
+local function PlaceScroll(top)
+	ui.scroll:ClearAllPoints()
+	ui.scroll:SetPoint("TOPLEFT", window, "TOPLEFT", LIST_LEFT, -top)
+	ui.scroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -36, 36)
+end
+
 -- Fills the window. `data` is ns.GetMailMaterials() when the caller has it already.
 RefreshWindow = function(data)
 	if not (window and ui) then
@@ -697,52 +727,76 @@ RefreshWindow = function(data)
 	end
 	ui.partial:SetShown(snapshot ~= nil and snapshot.partial == true)
 
+	-- The filter bar offers the professions of everything that would be shown; the list shows the selected one. The list moves
+	-- down with the bar, and a character left with no recipe is not shown.
+	local professions = {}
+	for _, character in ipairs(data.characters or {}) do
+		for _, entry in ipairs(character.entries) do
+			professions[#professions + 1] = entry.profession
+		end
+	end
+	PlaceScroll(ui.filter:Update(professions))
+	local groups = {}
+	for _, character in ipairs(data.characters or {}) do
+		local entries = {}
+		for _, entry in ipairs(character.entries) do
+			if ui.filter:Matches(entry.profession) then
+				entries[#entries + 1] = entry
+			end
+		end
+		if #entries > 0 then
+			groups[#groups + 1] = { character = character, entries = entries }
+		end
+	end
+
 	local child = ui.scrollChild
 	child:SetWidth(LIST_WIDTH)
 	local y = 0
 	local groupIndex, blockIndex = 0, 0
-	for _, character in ipairs(data.characters or {}) do
-		if #character.entries > 0 then
-			groupIndex = groupIndex + 1
-			local group = AcquireGroup(groupIndex)
-			group.title:ClearAllPoints()
-			group.title:SetPoint("TOPLEFT", child, "TOPLEFT", 2, -y)
-			group.title:SetText(Escape(character.name) .. (character.isOwn and " (this character)" or ""))
-			group.title:Show()
-			group.info:ClearAllPoints()
-			group.info:SetPoint("TOPLEFT", child, "TOPLEFT", 2, -(y + 15))
-			group.info:SetText(FormatGroupInfo(character, data.accountTime))
-			group.info:Show()
-			y = y + GROUP_TITLE_HEIGHT + InfoHeight(group.info) + GROUP_INFO_GAP
+	for _, shown in ipairs(groups) do
+		local character = shown.character
+		groupIndex = groupIndex + 1
+		local group = AcquireGroup(groupIndex)
+		group.title:ClearAllPoints()
+		group.title:SetPoint("TOPLEFT", child, "TOPLEFT", 2, -y)
+		group.title:SetText(Escape(character.name) .. (character.isOwn and " (this character)" or ""))
+		group.title:Show()
+		group.info:ClearAllPoints()
+		group.info:SetPoint("TOPLEFT", child, "TOPLEFT", 2, -(y + 15))
+		group.info:SetText(FormatGroupInfo(character, data.accountTime))
+		group.info:Show()
+		y = y + GROUP_TITLE_HEIGHT + InfoHeight(group.info) + GROUP_INFO_GAP
 
-			for _, entry in ipairs(character.entries) do
-				blockIndex = blockIndex + 1
-				local block = AcquireBlock(blockIndex)
-				block.entry = entry
-				block.header:ClearAllPoints()
-				block.header:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
-				block.icon:SetTexture(entry.icon or QUESTION_ICON)
-				block.name:SetText(Escape(entry.name))
-				block.profession:SetText(Escape(entry.profession))
-				block.status:SetText(FormatStatus(entry))
-				block.header:Show()
-				y = y + HEADER_HEIGHT + 2
-
-				for lineIndex, reagent in ipairs(entry.reagents) do
-					local line = AcquireLine(block, lineIndex)
-					line:ClearAllPoints()
-					line:SetPoint("TOPLEFT", child, "TOPLEFT", HEADER_ICON_SIZE + 10, -y)
-					line:SetText(FormatReagent(reagent, entry.isOwn))
-					line:Show()
-					y = y + LINE_HEIGHT
-				end
-				for lineIndex = #entry.reagents + 1, #block.lines do
-					block.lines[lineIndex]:Hide()
-				end
-				y = y + BLOCK_GAP
+		for _, entry in ipairs(shown.entries) do
+			blockIndex = blockIndex + 1
+			local block = AcquireBlock(blockIndex)
+			block.entry = entry
+			block.header:ClearAllPoints()
+			block.header:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
+			block.icon:SetTexture(entry.icon or QUESTION_ICON)
+			block.name:SetText(Escape(entry.name))
+			if ns.PlaceSkillUpText then
+				ns.PlaceSkillUpText(block.name, block.chance, block.icon, block.status, NAME_AREA_WIDTH, ns.FormatSkillUp and ns.FormatSkillUp(entry.skillUp) or nil)
 			end
-			y = y + GROUP_GAP
+			block.profession:SetText(Escape(entry.profession))
+			block.status:SetText(FormatStatus(entry))
+			block.header:Show()
+			y = y + HEADER_HEIGHT + 2
+
+			for lineIndex, reagent in ipairs(entry.reagents) do
+				local line = AcquireLine(block, lineIndex)
+				line:ClearAllPoints()
+				line:SetPoint("TOPLEFT", child, "TOPLEFT", HEADER_ICON_SIZE + 10, -y)
+				line:SetText(FormatReagent(reagent, entry.isOwn))
+				line:Show()
+				y = y + LINE_HEIGHT
+			end
+			for lineIndex = #entry.reagents + 1, #block.lines do
+				block.lines[lineIndex]:Hide()
+			end
+			y = y + BLOCK_GAP
 		end
+		y = y + GROUP_GAP
 	end
 	for index = groupIndex + 1, #ui.groups do
 		ui.groups[index].title:Hide()
@@ -921,8 +975,17 @@ local function BuildWindow()
 
 	-- List. Named so the template's "$parentScrollBar" children get a unique, namespaced global name.
 	ui.scroll = CreateFrame("ScrollFrame", SCROLL_NAME, frame, "UIPanelScrollFrameTemplate")
-	ui.scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -86)
-	ui.scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -36, 36)
+	PlaceScroll(LIST_TOP)
+
+	-- Filter bar between the header controls and the list; it only shows when the recipes belong to more than one profession.
+	-- Without Recipes.lua (the module the bar comes from) there is no bar and nothing is filtered.
+	ui.filter = ns.CreateProfessionFilter and ns.CreateProfessionFilter({
+		parent = frame, left = 16, top = FILTER_TOP, width = FRAME_WIDTH - 32, listTop = LIST_TOP,
+		onChange = function()
+			ui.scroll:SetVerticalScroll(0)
+			RefreshWindow()
+		end,
+	}) or { Update = function() return LIST_TOP end, Matches = function() return true end }
 
 	ui.scrollChild = CreateFrame("Frame", nil, ui.scroll)
 	ui.scrollChild:SetSize(LIST_WIDTH, HEADER_HEIGHT)
