@@ -317,8 +317,8 @@ The check box **Only <name>'s recipes** at the top of the window ("Only my recip
 - **Saved items of your characters.** The addon saves what each character carries, account-wide (see Saved data): the bags on login and
   whenever they change; the bank (the character's bank tabs) **only while the bank is open**, and it keeps the last snapshot after closing
   it; the account (warband) bank when you visit a bank that can show it, one snapshot for every character; and each character's mailbox. A
-  character's data is only as fresh as its last visit. Items you mail to one of your other characters (a recipient written as `Name` or
-  `Name-Realm`, in any case, on the current realm) are added to that character's saved mailbox when the game confirms the letter; the
+  character's data is only as fresh as its last visit. Items you mail to one of your other characters (a recipient written as `Name`, the WoW Forever two-part `Name Surname`, or
+  either with `-Realm`, in any case, on the current realm; the first name is what identifies the character) are added to that character's saved mailbox when the game confirms the letter; the
   character's next scan of its own mailbox replaces everything.
 - **Forgetting a character.** `/ju recipes forget <character>` removes the character's recipes together with its saved profession skills, bags, bank and
   mailbox. Characters that are not saved as knowing a recipe are not listed anyway. Forgetting the character you are playing (or every recipe)
@@ -344,7 +344,7 @@ is open) with that list:
 - **Left-click** a name to put it in the "To:" box (only the text is set: the focus and cursor are left alone).
 - **Right-click** a name to take it off the list.
 - A name is stored as you typed it (trimmed); sending to the same name again, in any capitalization, moves it to the top and keeps the
-  newest spelling. The count shown on the **Mail** tab and by `/ju mail` is the number of names saved for the realm. `Name` and `Name-Realm` count as different recipients. Your current character is never listed. A letter that fails
+  newest spelling. The count shown on the **Mail** tab and by `/ju mail` is the number of names saved for the realm. `Name` and `Name-Realm` count as different recipients. Your current character is never listed (on WoW Forever, its full `Name Surname` or `Name-Surname`, with or without the realm). A letter that fails
   to send, or that is still being sent when you close the mailbox, is not added.
 
 The **Mail** tab has an **Enable mail features (recent recipients and mail materials)** check box, the master switch of both mail
@@ -496,8 +496,8 @@ Stats with a weight of 0 do not contribute. The tooltip line is hidden for items
   at `PLAYER_ENTERING_WORLD`; it stays where it is until then): if the character already has a snapshot made only of sent items, the old scan is the base and the sent items are added on top.
 - **Mail sent to your own characters.** The `SendMail` hook (Mail.lua) reads the letter's attachments with `GetSendMailItem(1..ATTACHMENTS_MAX_SEND)` (name, itemID, texture, count,
   quality; Blizzard's mail frame only empties them when `MAIL_SEND_SUCCESS` arrives, so they are still there when the hook runs) and queues them with the recipient in the same
-  first-in first-out queue as the recent recipients; `MAIL_SEND_SUCCESS` takes the oldest entry and, when its recipient (case-insensitive `Name`, or `Name-Realm` of this
-  realm, never the current character) is a character the addon knows, adds the items to that character's mail snapshot (`sentTime`; `GetSendMailCOD() > 0` also marks them COD; realms are compared without spaces, hyphens and case); `MAIL_FAILED` without an item ID,
+  first-in first-out queue as the recent recipients; `MAIL_SEND_SUCCESS` takes the oldest entry and, when its recipient (case-insensitive `Name` or `Name Surname`, optionally `-Realm` of this
+  realm, compared by first name, never the current character) is a character the addon knows, adds the items to that character's mail snapshot (`sentTime`; `GetSendMailCOD() > 0` also marks them COD; realms are compared without spaces, hyphens and case); `MAIL_FAILED` without an item ID,
   `MAIL_SHOW` and `MAIL_CLOSED` drop queued letters. Nothing is read while the mail features are off.
 - **Inspecting the API.** If a score looks wrong, shift-click the item and run `/ju dump <item link>`. It prints the raw
   `C_Item.GetItemStats` table, the "Equip:" effects that were parsed, and the final calculation.

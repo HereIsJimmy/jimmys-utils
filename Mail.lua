@@ -134,17 +134,35 @@ local function GetRealmKey()
 	return normalized or (GetRealmName and CleanRealm(GetRealmName())) or "Unknown"
 end
 
--- Is this name the current character ("Name" or "Name-Realm", any case)?
+-- Is this name the current character (any case, optionally followed by "-Realm")? On WoW Forever a character has a two-part
+-- name: UnitName("player") returns the first name and the surname, and a letter goes to "Name Surname" (or "Name-Surname"); a
+-- character without a surname is just "Name".
 local function IsSelf(name)
-	local player = UnitName and UnitName("player")
+	if not UnitName then
+		return false
+	end
+	local player, surname = UnitName("player")
 	if IsSecret(player) or type(player) ~= "string" or player == "" then
 		return false
 	end
-	local lowered = name:lower()
-	player = player:lower()
-	if lowered == player then
-		return true
+	if IsSecret(surname) or type(surname) ~= "string" then
+		surname = nil
 	end
+	player = Trim(player):lower()
+	surname = surname and Trim(surname):lower() or ""
+	-- Some clients put the whole name in the first value.
+	local first, rest = player:match("^(%S+)%s+(.+)$")
+	if first and surname == "" then
+		player, surname = first, rest
+	end
+	local forms = {}
+	if surname ~= "" then
+		forms[#forms + 1] = player .. " " .. surname
+		forms[#forms + 1] = player .. "-" .. surname
+	else
+		forms[#forms + 1] = player
+	end
+	local lowered = name:lower():gsub("%s+", " ")
 	local realms = {}
 	if GetNormalizedRealmName then
 		realms[#realms + 1] = CleanRealm(GetNormalizedRealmName())
@@ -152,9 +170,14 @@ local function IsSelf(name)
 	if GetRealmName then
 		realms[#realms + 1] = CleanRealm(GetRealmName())
 	end
-	for _, realm in ipairs(realms) do
-		if lowered == player .. "-" .. realm:lower() then
+	for _, form in ipairs(forms) do
+		if lowered == form then
 			return true
+		end
+		for _, realm in ipairs(realms) do
+			if lowered == form .. "-" .. realm:lower() then
+				return true
+			end
 		end
 	end
 	return false

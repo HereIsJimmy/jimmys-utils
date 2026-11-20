@@ -236,13 +236,15 @@ function ns.GetInventoryCharacters()
 end
 
 -- The character ("Name-Realm") on the current realm that a letter to `recipient` ("Name" or "Name-Realm", any case) goes to,
--- among the characters this addon knows. Never the current character.
+-- among the characters this addon knows. Never the current character. On WoW Forever a recipient is "Name Surname": the keys
+-- only hold the first name, so that is what is compared.
 function ns.FindOwnCharacter(recipient)
 	if IsSecret(recipient) or type(recipient) ~= "string" then
 		return nil
 	end
 	local ownKey, ownRealm = OwnKey()
 	local name, realm = SplitKey((recipient:gsub("^%s+", ""):gsub("%s+$", "")))
+	name = name:match("^(%S*)")
 	if name == "" then
 		return nil
 	end
