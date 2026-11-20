@@ -531,6 +531,9 @@ local HELP_LINES = {
 	"/ju mail - show whether the mail features (recent recipients and mail materials) are on; /ju mail on | off - turn them on or off",
 	"/ju mail clear - forget the recent mail recipients of this realm",
 	"/ju minimap - show or hide the minimap button; /ju minimap reset - move it back to its default place",
+	"/ju pin - put the map pin where you stand",
+	"/ju pin <x> <y> - put the map pin in your current zone at those coordinates (percent, as the map shows them; for example /ju pin 45.2 67.8)",
+	"/ju pin clear - remove the map pin",
 	"/ju materials - open or close the window listing the recipes your mail has materials for, for this character and (with the check box in the window) your other characters on this realm; bags, bank and the mail of each character count (also works away from the mailbox; needs the mail features on)",
 }
 
@@ -880,6 +883,12 @@ SlashCmdList["JIMMYSUTILS"] = function(msg)
 			ns.HandleMinimapCommand(rest)
 		else
 			ns.Print("The minimap button is not available.")
+		end
+	elseif command == "pin" then
+		if ns.HandlePinCommand then
+			ns.HandlePinCommand(rest)
+		else
+			ns.Print("The map pin is not available.")
 		end
 	elseif command == "materials" then
 		if ns.HandleMaterialsCommand then

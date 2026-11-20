@@ -69,6 +69,18 @@ not to a tab) or with `/ju minimap`; `/ju minimap reset` moves it back to its de
 the minimap's addon compartment menu (the button that lists addons): left-click opens the options window, right-click the materials, and the
 tooltip is the same. That entry does not depend on the minimap button being shown.
 
+### Map pin
+
+`/ju pin <x> <y>` puts the map pin (the waypoint you get by shift-clicking the map) in the zone you are in, at the coordinates the map shows (percent,
+0 to 100), and turns on its arrow in the world, like setting it on the map yourself. For example `/ju pin 45.2 67.8` prints
+`Map pin set in <zone> at 45.2, 67.8.` followed by a link you can shift-click to share. The coordinates can be written `45.2 67.8`, `45.2, 67.8`,
+`45.2,67.8` or `45 67`, and with decimal commas when a space separates the numbers (`45,2 67,8`). Anything else prints the usage, and a number outside
+0 to 100 says so. `/ju pin` with nothing after it puts the pin where you stand (inside instances, where the game does not give your position,
+it says so). `/ju pin clear` (or `/ju pin remove`) takes the pin away and turns its arrow off.
+
+If the client does not know which zone you are in, or does not allow a pin in it (some zones and instances do not), the command says so and does nothing.
+The command works on the zone you are standing in, not on the map window you have open. Nothing is saved.
+
 ### Stat Weights tab
 
 There you can:
@@ -404,6 +416,9 @@ you switch them with `/ju mail on` / `off` or the check box).
 | `/ju mail clear` | Forget the recent recipients of the current realm |
 | `/ju minimap` | Show or hide the minimap button (prints which) |
 | `/ju minimap reset` | Move the minimap button back to its default place (bottom left) |
+| `/ju pin` | Put the map pin where you stand, in your current zone, and turn on its arrow |
+| `/ju pin <x> <y>` | Put the map pin in your current zone at those coordinates (percent as the map shows them, 0-100, e.g. `/ju pin 45.2 67.8`) and turn on its arrow; prints the zone and a link to share |
+| `/ju pin clear` | Remove the map pin (`/ju pin remove` does the same) |
 | `/ju materials` | Open or close the window with the recipes your mail has materials for, for this character and your other characters on this realm (check box **Only my recipes** for this character alone) (works away from the mailbox, from the saved scans; says so when the mail features are off) |
 
 ## How the score is computed
@@ -552,7 +567,10 @@ A quick first session:
     window's colors (compare them with the colors in the profession window itself), and the tooltip should read `Skill-up chance: ...`.
     Craft something until the skill goes up with the lookup window open: the chance follows. Check a recipe whose item you know (the
     Wowhead window's first box should be `item=...`), and one with no teaching item, such as a trainer recipe (only the spell page is shown).
-13. On a non-English client the "Equip:" fallback is off; note which effects only appear as "Equip:" text.
+13. Map pin: in a zone with a map (say Elwynn Forest), `/ju pin 45.2 67.8` should set the pin where the map shows 45.2, 67.8 (open the map with M and compare),
+    turn on the arrow in the world, and print the zone and a shift-clickable link. Try `45,2 67,8`, `45 67`, `/ju pin` alone (the pin should land under your arrow on the map), a bad value (`/ju pin 120 5`, `/ju pin a b`)
+    for the messages, a zone or instance that does not allow pins (the command should say so), and `/ju pin clear` with and without a pin.
+14. On a non-English client the "Equip:" fallback is off; note which effects only appear as "Equip:" text.
 
 ## Files
 
@@ -567,6 +585,7 @@ A quick first session:
 - `Inventory.lua` - the saved bags, bank, account bank and mailbox of each character, and mail sent to your own characters
 - `MailMaterials.lua` - the recipe materials in your mail: inbox scan, the window (grouped by character) and `/ju materials`
 - `Minimap.lua` - the minimap button, its saved position, the addon compartment callbacks and `/ju minimap`
+- `Pin.lua` - the map pin command, `/ju pin`
 - `Media\MinimapIcon.tga` - the icon of the minimap button and of the addon compartment entry (64x64, 32-bit with alpha)
 - `Bindings.xml` - the "Find recipes using hovered item" key binding (loaded automatically, not listed in the `.toc`)
 - `Options.lua` - the options window (all tabs and the footer check box) and its Settings > AddOns entry

@@ -21,6 +21,7 @@
 | **Recent mail recipients** | A panel next to the Send Mail tab with the last 10 characters you mailed. Click a name to fill in the "To:" box. |
 | **Mailbox buttons** | A **Take all** button in the open letter that takes every item and the money in one click (never from cash on delivery letters), and a small icon in the mailbox title bar that opens the materials window. |
 | **Materials in your mail** | `/ju materials` lists the recipes that use items waiting in your mailbox, with how many of each ingredient (bags, bank and mail) you have, how many you still need, and which recipes are already craftable. It also shows what your other characters on the realm could craft, from their saved bags, bank and mail (including items you mail them), and which need the mail sent first. Each recipe shows that character's skill-up chance. Profession buttons above the list filter it to one profession, and professions can be hidden for good in the Mail tab of the settings. |
+| **Map pin** | `/ju pin 45.2 67.8` puts the map pin in your current zone at those coordinates (as the map shows them), or `/ju pin` alone where you stand, and turns on its in-world arrow; `/ju pin clear` removes it. |
 
 Every feature can be switched on or off on its own. A minimap button (also listed in the addon compartment) opens the settings
 with a left-click and the mail materials with a right-click.
@@ -68,6 +69,9 @@ Upgrading from **Jimmy's Stat Weights**? Your weights aren't picked up automatic
 | `/ju mail on\|off` | Mail features |
 | `/ju materials` | Open or close the materials window |
 | `/ju minimap` | Show or hide the minimap button |
+| `/ju pin` | Put the map pin where you stand |
+| `/ju pin <x> <y>` | Put the map pin at those coordinates (0-100) of your current zone |
+| `/ju pin clear` | Remove the map pin |
 
 The complete list, with every option explained, is in the [full guide](docs/GUIDE.md).
 
