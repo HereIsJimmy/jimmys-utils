@@ -12,8 +12,8 @@ materials, see [Minimap button](#minimap-button)):
   The number is a weighted sum of the item's stats, using coefficients you choose. Higher is better for the weights you set.
 - **Range check** - a small indicator that shows the icon of a spell you pick while your target is within range of it, and
   tints it red while it is not.
-- **Recipe lookup** - point at an item and press a key (or type `/ju recipes <item>`) to list the recipes that use it as an
-  ingredient, the materials each one needs and which of your characters know it.
+- **Recipe lookup** - point at an item and press a key (or type `/ju recipes <item>`) to list every recipe that uses it as an
+  ingredient, the materials each one needs and which of your characters know it (the recipes nobody knows are listed too, in grey).
 - **Recent mail recipients** - a small panel docked next to the Send Mail tab of the mailbox that lists the last 10 characters
   you sent mail to; click a name to fill in the "To:" box.
 - **Recipe materials in your mail** - a window that lists the recipes your characters know which use items waiting in your
@@ -139,24 +139,25 @@ To look an item up:
   they are): an exact match first, then a part of the name. When
   several items match, up to five are listed in chat with their IDs; use the ID or a longer name.
 
-A window titled "Recipes using <item>" lists every saved recipe that uses the item as a basic ingredient (optional and finishing
-reagents are not saved). Each row has the recipe icon and name, the quantity of the item it needs (`x2`), and a line with its
-profession and either `Known: Jamie, Khaz` (characters of your current realm are shown without their realm) or `Not known`.
+A window titled "Recipes using <item>" lists every recipe that uses the item as a basic ingredient: the saved recipes (optional
+and finishing reagents are not saved) and every recipe of the bundled game data whose ingredients include it (see Data source below),
+including the ones none of your characters knows. Each row has the recipe icon and name, the quantity of the item it needs (`x2`), and a line with its
+profession and either `Known: Jamie, Khaz` (characters of your current realm are shown without their realm) or `Not known by your characters`.
 Under it comes the full list of materials for one craft with their quantities, for example `Silverleaf x1, Earthroot x1, Empty
 Vial x1`; an ingredient is green when the character you are playing has enough of it for one craft (bags, bank, reagent bank and account bank together), orange when you have some but not enough (then it shows what you have against what is needed, e.g. `Silverleaf (1/3)`), and red when you have none, and the colors follow your bags while the window is open; the tooltip says how many you have. The list follows the order of the recipe's ingredient slots. A slot
 that accepts several items (for example the quality tiers of an herb) shows the first one followed by `(any quality)`. Recipes
 saved before the slots were kept list their ingredients by name instead. An item name the client has not given yet shows as
 `item:<id>` and is filled in, and the window refreshed, as soon as the client reports it. The row grows to fit a long list, so
-nothing is cut off. Recipes somebody knows come first, then the rest sorted by profession and name. Hovering a row shows the
+nothing is cut off. Recipes somebody knows come first, then the ones nobody knows (their name is grey), each group sorted by profession and name. Hovering a row shows the
 tooltip of the item the recipe makes (or of the recipe itself when it makes no item), followed by the materials, the list of
-characters that know it, the skill-up chance, and, only when the game gave one, the "Where to get it" text. The footer shows how many recipes are saved
-and from which professions.
+characters that know it (or "Not known by your characters."), the skill-up chance, and, only when the game gave one, the "Where to get it" text. The footer shows how many recipes are saved
+and from which professions (the recipes only the bundled data lists are not saved and not counted there).
 
 After a recipe's name the row shows its **skill-up chance**, for example `(88%)`, in the official difficulty colors: orange when it is
-a sure skill-up (100%), yellow, green, and grey (0%). It is the chance for the character you are playing when it has that
-profession (also for recipes it does not know yet, which tells you what it would be), otherwise for the character that knows the recipe
-and has the best chance; the tooltip names that character. Nothing is shown while no character with the profession has been seen
-(the skill is saved at login and when you open the profession window).
+a sure skill-up (100%), yellow, green, and grey (0%). It is the chance for the character you are playing when it knows the recipe,
+otherwise for the character that knows the recipe and has the best chance; the tooltip names that character. A recipe none of your
+characters know shows no chance (the game data does not say what skill is needed to learn it). Nothing is shown either while the skill of
+the characters that know it has not been seen (the skill is saved at login and when you open the profession window).
 
 Every row has a small **Wowhead** button. The client cannot open web pages, so it opens a small window titled "Wowhead links" with
 the recipe's name and two boxes to copy from. When the bundled data knows which item teaches the recipe (see [Skill-up chance and
@@ -192,18 +193,33 @@ recipe tracker uses). This works only for recipes the character you are playing 
 (**All** and one per profession, wrapping onto more rows when they do not fit); click one to list only that profession's recipes. The choice
 is kept until you close the game and goes back to **All** when its profession is not in the results of the next lookup.
 
+**Only my professions.** The check box at the top of the window, under the item, keeps only the recipes of the professions the character
+you are playing has (**Only Jamie's professions**; a long name makes it **Only my professions**). A recipe of the bundled data counts by its skill line,
+any other saved recipe by the profession name it was saved under; a recipe the character knows always counts, and when the client does not give the
+character's professions (not loaded yet) the check box filters nothing. The choice is saved for your whole account (`recipeLookup.onlyMyProfessions`, off by default),
+and switching it refreshes the window and goes back to the top of the list. It is applied first: the professions hidden in the settings are dropped
+from what it leaves (so the *x2* counts below only count those recipes), and the profession buttons are built from what remains. When it leaves nothing, the
+window says *None of these recipes belong to your professions.*
+
+**Profession names.** A bundled recipe is shown under the name the client gives its skill line when the addon can tell it: the name of one of
+your character's professions, or the spelling the saved recipes of that skill line use; otherwise under the English name from the bundled data.
+Names are compared without regard to case, so they meet the ones already saved (a client in another language therefore shows one button per
+profession, not two).
+
 **Hiding professions for good.** Under **Professions shown in the window** on the Recipes tab, right under the saved recipes, there is one check box per
-profession found in the saved recipes; uncheck one to leave that profession out of this window (checked means shown). The choice is saved for your whole
+profession found in the saved recipes or in the bundled recipes (so every profession button of the window can be hidden); uncheck one to leave that profession out of this window (checked means shown). The choice is saved for your whole
 account (`recipeLookup.hiddenProfessions`) and an open window follows at once. Hidden professions are dropped before the buttons are built, so the
 buttons only offer what is left. A small line above the buttons says *Professions can be hidden permanently in the settings (/ju).* in grey while the
 buttons are shown, and, in orange, *Hidden in the settings: Alchemy x2, Cooking* whenever something is hidden (even with no buttons; *x2* is the number of that profession's recipes left out of this window, and a hidden profession with none is just its name, after the others); when hiding leaves
 no recipe, the window says they are all hidden by the profession settings. The materials window has its own list, on the Mail tab.
 
-**Recipes nobody knows.** They only show up if the client gives addons recipes the character has not learned.
-Forever's own profession window hides them, so it may be that every recipe the addon sees is already known by the character
-that scanned it. Recipes that another character knows always show `Known: <name>`. To find out what your client does, open a
-profession window and type `/ju recipes status`: it shows whether `C_TradeSkillUI.GetAllRecipeIDs` exists and, for the open
-window, how many recipes `GetAllRecipeIDs` and `GetFilteredRecipeIDs` return and how many of them are not learned.
+**Recipes nobody knows.** The window does not need the profession windows for them: every recipe of the bundled game data that uses the item is
+listed, after the known ones, with its name in grey, the status `Not known by your characters` and the materials colored by what you have. Nothing is
+saved for them, and the materials window and the saved-recipe counts stay on the recipes your characters know. A recipe whose name the client has
+not loaded yet shows as `Recipe <id>`; the name is asked for (a few times per session at most) and the window is refreshed when it arrives.
+Its Wowhead links work as for any row. Double-clicking opens only recipes the character you are playing knows; for the others a chat line says
+who knows it (or that nobody does). Recipes that another character knows always show `Known: <name>`. `/ju recipes status` still shows whether
+`C_TradeSkillUI.GetAllRecipeIDs` exists and, for an open profession window, how many recipes it returns and how many are not learned.
 
 The **Recipes** tab explains this, shows the current key (or how to set one), the number of saved recipes per profession, and has
 a **Forget saved recipes** button (it asks for a second click). Saved recipes are listed under Saved data below. A character that
@@ -231,8 +247,8 @@ Wowhead window shows. Recipes the game data has no teaching item for (trainer, q
 
 **Data source.** `Data/RecipeData.lua` is generated and must not be edited. It holds `ns.RecipeThresholds[spellID] = { yellow, grey }`,
 `ns.RecipeTeachers[spellID] = itemID` (the recipe ID the profession window uses is the spell ID), `ns.RecipeSkillLines[spellID] = skillLineID` (a sorted list `{ line, line }` for the few recipes that belong to several),
-`ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... }` and `ns.RecipeOutputs[spellID] = itemID`, taken from the SkillLineAbility,
-ItemXItemEffect, ItemEffect, SpellReagents and SpellEffect tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
+`ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... }`, `ns.RecipeOutputs[spellID] = itemID` and `ns.SkillLineNames[skillLineID] = "Alchemy"` (the English name of
+each skill line the recipes use), taken from the SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect and SkillLine tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
 Blizzard's game data; this addon is not affiliated with or endorsed by Blizzard. To regenerate it for a newer client build, change the `BUILD`
 constant in `tools/gen_recipe_data.py` and run, from the addon folder, `python -I tools/gen_recipe_data.py` (Python 3, standard library only;
 `--cache <folder>` keeps the downloaded CSV files, `--refresh` downloads them again). The script refuses to write the file if it no longer
@@ -271,7 +287,7 @@ current character: for another character's recipe the chat says who knows it; lo
 
 When the recipes shown belong to more than one profession, a row of **profession buttons** (**All** and one per profession) sits above the
 list; click one to see only that profession's recipes in every character's group (a character with none is hidden). The choice is kept for
-the session and goes back to **All** when its profession leaves the list, for example after turning **Show other characters** off.
+the session and goes back to **All** when its profession leaves the list, for example after checking **Only my recipes**.
 Professions can also be hidden for good with the check boxes under **Professions shown in the window** on the **Mail** tab of the settings (saved
 for your whole account as `mailMaterials.hiddenProfessions`, separate from the recipes window's list); the same line above the buttons tells which are hidden.
 
@@ -290,7 +306,7 @@ ago, mail 1 day ago, account bank 1 day ago`, or `bank never seen - open the ban
 addon (the bank of the current character: `open your bank to include it`), or `mailbox never seen` (with `(items sent 5 minutes ago)` for
 items you mailed to it from another character since its last scan).
 
-The check box **Show other characters** at the top of the window (saved, on by default) limits the list to the current character.
+The check box **Only <name>'s recipes** at the top of the window ("Only my recipes" when the name does not fit; saved, off by default) limits the list to the current character.
 
 - **Opening it.** Only `/ju materials` opens it (and closes it again); it never opens by itself. Close it with its close button or Escape.
   While it is open it follows mailbox and bag changes. It can be moved; its position is remembered. Until you move it, it sits to the
@@ -388,7 +404,7 @@ you switch them with `/ju mail on` / `off` or the check box).
 | `/ju mail clear` | Forget the recent recipients of the current realm |
 | `/ju minimap` | Show or hide the minimap button (prints which) |
 | `/ju minimap reset` | Move the minimap button back to its default place (bottom left) |
-| `/ju materials` | Open or close the window with the recipes your mail has materials for, for this character and (check box **Show other characters**) your other characters on this realm (works away from the mailbox, from the saved scans; says so when the mail features are off) |
+| `/ju materials` | Open or close the window with the recipes your mail has materials for, for this character and your other characters on this realm (check box **Only my recipes** for this character alone) (works away from the mailbox, from the saved scans; says so when the mail features are off) |
 
 ## How the score is computed
 
@@ -557,7 +573,7 @@ A quick first session:
 
 ### Saved data
 
-Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup and its `hiddenProfessions`, last tab, and the
+Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, its `hiddenProfessions` and `onlyMyProfessions` (the check box of the recipes window), last tab, and the
 saved recipes: `recipes`, `recipeKnownBy` with the characters that know each recipe as `Name-Realm`, and `itemNames` with the names
 of ingredients, and `recipeSkill` with each character's rank and maximum in each profession; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
 the materials window, `showOthers` and `hiddenProfessions`; `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`

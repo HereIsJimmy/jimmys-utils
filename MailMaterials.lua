@@ -35,7 +35,7 @@ local addonName, ns = ...
 	Each recipe also shows the chance that crafting it raises that character's skill, "(NN%)" in the official difficulty colors
 	(ns.GetRecipeSkillUp, Recipes.lua); nothing while the character's skill in the profession is not known.
 
-	Profession filter: when the recipes shown (after "Show other characters") belong to more than one profession, a button bar
+	Profession filter: when the recipes shown (after "Only my recipes") belong to more than one profession, a button bar
 	(ns.CreateProfessionFilter, Recipes.lua) offers "All" and one button per profession; a click lists only that profession's
 	recipes in every character's group, and a group left with none is hidden. The selection is kept for the session (not saved)
 	and falls back to "All" when the profession leaves the results. Professions can also be hidden for good (mailMaterials.
@@ -62,6 +62,8 @@ local HEADER_ICON_SIZE = 28
 local LINE_HEIGHT = 14
 local BLOCK_GAP = 10
 local STATUS_WIDTH = 120
+local CHECK_SIZE = 22
+local CHECK_LABEL_WIDTH = FRAME_WIDTH - 12 - CHECK_SIZE - 4 - 16 -- room for the label of the check box
 local NAME_AREA_WIDTH = LIST_WIDTH - (2 + HEADER_ICON_SIZE + 6) - (4 + STATUS_WIDTH + 4) -- where a recipe name and its skill-up chance fit
 local GROUP_TITLE_HEIGHT = 15 -- a character's name; the line under it about what is known of its items follows (as tall as its text)
 local GROUP_INFO_MIN_HEIGHT = 12
@@ -711,6 +713,22 @@ local function PlaceScroll(top)
 	ui.scroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -36, 36)
 end
 
+-- The label of the "only this character" check box: "Only <name>'s recipes", or "Only my recipes" when that would be cut.
+local function UpdateOnlyMineLabel()
+	local key = ns.GetCharacterKey and ns.GetCharacterKey()
+	local name = type(key) == "string" and key:match("^([^%-]+)") or nil
+	local label = "Only my recipes"
+	if name then
+		local long = "Only " .. (name:gsub("|", "||")) .. "'s recipes"
+		ui.measure:SetText(long)
+		local width = ui.measure:GetStringWidth()
+		if type(width) ~= "number" or width <= CHECK_LABEL_WIDTH then
+			label = long
+		end
+	end
+	ui.showOthers.Text:SetText(label)
+end
+
 -- Fills the window. `data` is ns.GetMailMaterials() when the caller has it already.
 RefreshWindow = function(data)
 	if not (window and ui) then
@@ -720,7 +738,8 @@ RefreshWindow = function(data)
 	local snapshot = data.snapshot
 	local showOthers = not (settings and settings.showOthers == false)
 
-	ui.showOthers:SetChecked(showOthers)
+	ui.showOthers:SetChecked(not showOthers)
+	UpdateOnlyMineLabel()
 	if snapshot and snapshot.time then
 		ui.source:SetText("From your mailbox, " .. Ago(snapshot.time))
 	elseif snapshot then
@@ -960,24 +979,30 @@ local function BuildWindow()
 	ui.source:SetJustifyH("LEFT")
 	ui.source:SetWordWrap(false)
 
-	-- Whether the recipes of your other characters on this realm are listed too.
+	-- Checked: only the current character's recipes; unchecked (the default) also lists your other characters on this realm. The
+	-- setting is saved as showOthers (the opposite of the check box).
 	ui.showOthers = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-	ui.showOthers:SetSize(22, 22)
+	ui.showOthers:SetSize(CHECK_SIZE, CHECK_SIZE)
 	ui.showOthers:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -46) -- a row of its own, so no text next to it can be cut
 	ui.showOthers.Text:SetFontObject("GameFontHighlightSmall")
-	ui.showOthers.Text:SetText("Show other characters")
-	ui.showOthers:SetChecked(true)
+	ui.showOthers.Text:SetWidth(CHECK_LABEL_WIDTH)
+	ui.showOthers.Text:SetWordWrap(false)
+	ui.showOthers.Text:SetJustifyH("LEFT")
+	ui.showOthers.Text:SetText("Only my recipes")
+	ui.measure = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall") -- measures the label
+	ui.measure:Hide()
+	ui.showOthers:SetChecked(false)
 	ui.showOthers:SetScript("OnClick", function(self)
 		if settings then
-			settings.showOthers = self:GetChecked() and true or false
+			settings.showOthers = not self:GetChecked()
 		end
 		RefreshWindow()
 	end)
 	ui.showOthers:HookScript("OnEnter", function(self)
 		if GameTooltip then
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-			GameTooltip:SetText("Show other characters")
-			GameTooltip:AddLine("Also list the recipes of your other characters on this realm that can use the mail, counting their saved bags, bank and mail.", 0.8, 0.8, 0.8, true)
+			GameTooltip:SetText("Only my recipes")
+			GameTooltip:AddLine("Only list this character's recipes. Unchecked, the recipes of your other characters on this realm that can use the mail are listed too, counting their saved bags, bank and mail. Saved for all your characters.", 0.8, 0.8, 0.8, true)
 			GameTooltip:Show()
 		end
 	end)

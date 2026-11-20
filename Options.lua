@@ -989,18 +989,18 @@ end
 local RECIPES_BINDING = "JIMMYSUTILS_RECIPES"
 local RECIPES_HELP = "Jimmy's Utils remembers the recipes of your professions and which of your characters know them. "
 	.. "Point at an item and press the key below (or type "
-	.. "/ju recipes <item link, ID or name>) to list the saved recipes that use it as an ingredient, and where to get "
-	.. "the ones nobody knows."
-local RECIPES_NOTE = "Who knows a recipe is always shown. Where to get a recipe that no character knows only works if the "
-	.. "client gives addons recipes you have not learned, which Forever's own profession window hides: type "
-	.. "/ju recipes status with a profession window open to see whether it does."
+	.. "/ju recipes <item link, ID or name>) to list every recipe that uses it as an ingredient, from the game data "
+	.. "as well as the ones you saved."
+local RECIPES_NOTE = "Who knows a recipe is always shown; a recipe none of your characters knows is listed in grey. "
+	.. "The check box at the top of the window keeps only the recipes of your current character's professions."
 
 -- "Professions shown in the window": one check box per profession found in the saved recipes (checked = shown; unchecking
 -- hides the profession from the feature's window, see Recipes.lua and MailMaterials.lua), in columns. A profession that is
 -- hidden but has no saved recipe any more is listed too (unchecked), so it can be shown again. With nothing saved and nothing
 -- hidden a grey line says so. section:Refresh() rebuilds the check boxes from the saved data and returns how tall the section
 -- is (so a scrolling page can size its content). `getHidden()` returns the saved set { [lowercase profession] = true }
--- and `setHidden(profession, hidden)` saves one change and refreshes the open window.
+-- and `setHidden(profession, hidden)` saves one change and refreshes the open window. `getProfessions()` (optional) returns the
+-- names to list instead of the saved recipes' professions (the Recipes tab adds the professions of the bundled recipes).
 local PROFESSIONS_HEADER = "Professions shown in the window"
 local PROFESSIONS_NONE = "No recipes are saved yet, so there are no professions to choose from."
 local PROFESSIONS_HEADER_HEIGHT = 20 -- the header line, and the notice or the first row under it
@@ -1009,7 +1009,7 @@ local PROFESSION_CHECK_SIZE = 22
 local PROFESSION_TWO_COLUMNS_MAX = 12 -- more professions than this use three columns
 local PROFESSION_LABEL_PADDING = 28 -- the check box and the gap before its label
 
-local function BuildProfessionSection(parent, x, y, width, getHidden, setHidden)
+local function BuildProfessionSection(parent, x, y, width, getHidden, setHidden, getProfessions)
 	local section = { checks = {} }
 
 	section.header = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -1050,12 +1050,20 @@ local function BuildProfessionSection(parent, x, y, width, getHidden, setHidden)
 		local hidden = getHidden()
 		-- One entry per profession whatever the case, labeled with the first spelling saved.
 		local list, seen = {}, {}
-		local _, professions = ns.GetRecipeSummary()
-		for _, profession in ipairs(professions) do
-			local key = ns.ProfessionKey(profession.name)
+		local names = {}
+		if getProfessions then
+			names = getProfessions()
+		else
+			local _, professions = ns.GetRecipeSummary()
+			for _, profession in ipairs(professions) do
+				names[#names + 1] = profession.name
+			end
+		end
+		for _, name in ipairs(names) do
+			local key = ns.ProfessionKey(name)
 			if key and not seen[key] then
 				seen[key] = true
-				list[#list + 1] = { key = key, label = profession.name:match("^%s*(.-)%s*$") }
+				list[#list + 1] = { key = key, label = name:match("^%s*(.-)%s*$") }
 			end
 		end
 		local extra = {}
@@ -1221,7 +1229,7 @@ local function BuildRecipesPage(page)
 
 	-- Which professions the recipes window lists (saved account-wide).
 	ui.recipesProfessions = BuildProfessionSection(content, 4, -RECIPES_PROFESSIONS_TOP, RECIPES_TEXT_WIDTH,
-		ns.GetHiddenRecipeProfessions, ns.SetRecipeProfessionHidden)
+		ns.GetHiddenRecipeProfessions, ns.SetRecipeProfessionHidden, ns.GetRecipeWindowProfessions)
 
 	local header = content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
 	header:SetText("Recipe lookup")
