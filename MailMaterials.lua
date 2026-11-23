@@ -8,8 +8,8 @@ local addonName, ns = ...
 	characters" check box is off.
 
 	Saved data (validated in InitData):
-		JimmysStatWeightsDB.mailMaterials = { position = { point, relPoint, x, y }, showOthers = true, hiddenProfessions = { [lowercase profession] = true } }
-			-- window position, other characters shown, professions the window leaves out (Options > Mail)
+		JimmysStatWeightsDB.mailMaterials = { position = { point, relPoint, x, y }, size = { width, height }, showOthers = true, hiddenProfessions = { [lowercase profession] = true }, sortProfit = false }
+				-- window position and size, other characters shown, professions the window leaves out (Options > Mail), recipes ordered by crafting profit
 		JimmysStatWeightsDB.inventory[character].mail = { time = time(), counts = { [itemID] = quantity }, cod = { [itemID] = true }, partial = bool }
 
 	The snapshot of the mailbox lives with the other item snapshots of the character (Inventory.lua: ns.GetMailSnapshot /
@@ -34,6 +34,16 @@ local addonName, ns = ...
 
 	Each recipe also shows the chance that crafting it raises that character's skill, "(NN%)" in the official difficulty colors
 	(ns.GetRecipeSkillUp, Recipes.lua); nothing while the character's skill in the profession is not known.
+
+	Resizing: a grip in the bottom right corner (the chat frame's look) resizes the window; its default size is its minimum, the maximum
+	is twice that or what the screen holds (ns.GetWindowBounds). Everything with a width (the rows, the character lines, the profession
+	bar, the check box label) follows the width the window has at each refresh, and a taller window shows more rows. The size is saved
+	in mailMaterials.size when the grip is let go (cleaned and clamped on load, nothing saved for the default size), together with the
+	position (sizing from the bottom right may move the anchor), and a double-click on the grip goes back to the default size.
+
+	Crafting profit (Profit.lua, needs Auctionator): every recipe also shows its profit on its second line, and a button in the header
+	switches the order inside each character's group between the usual one (craftable first, fewest missing, name) and highest profit
+	first, the recipes without a price last and then the usual order. The profit is read again on every refresh (ns.GetMailMaterials).
 
 	Profession filter: when the recipes shown (after "Only my recipes") belong to more than one profession, a button bar
 	(ns.CreateProfessionFilter, Recipes.lua) offers "All" and one button per profession; a click lists only that profession's
@@ -69,6 +79,8 @@ local GROUP_TITLE_HEIGHT = 15 -- a character's name; the line under it about wha
 local GROUP_INFO_MIN_HEIGHT = 12
 local GROUP_INFO_GAP = 6
 local GROUP_GAP = 6
+local SORT_BUTTON_WIDTH = 96
+local SORT_BUTTON_HEIGHT = 20
 local QUESTION_ICON = 134400 -- INV_Misc_QuestionMark
 
 -- Without a saved position the window sits right of everything the mailbox can show: the mailbox, the open letter beside it
@@ -299,6 +311,8 @@ end
 -- is added up over them and compared with the slot's quantity; itemID is the one shown (the one there is most of).
 local function BuildEntries(recipes, who, cache)
 	local entries = {}
+	local profitOn = ns.IsProfitAvailable ~= nil and ns.IsProfitAvailable()
+	local sortProfit = profitOn and settings ~= nil and settings.sortProfit == true
 	local theirCounts, theirCod = who.theirCounts or {}, who.theirCod or {}
 	local mailCounts, mailCod = who.mailCounts or {}, who.mailCod or {}
 	local ownedCache = {}
@@ -384,12 +398,19 @@ local function BuildEntries(recipes, who, cache)
 				craftable = missingTotal == 0,
 				needsMail = missingTotal == 0 and needsMail,
 				skillUp = ns.GetRecipeSkillUp and ns.GetRecipeSkillUp(recipe.recipeID, who.key) or nil,
+				profit = profitOn and ns.GetRecipeProfit(recipe.recipeID, recipe) or nil,
 				reagents = reagents,
 			}
 		end
 	end
 
 	table.sort(entries, function(a, b)
+		if sortProfit then
+			local before = ns.CompareProfit(a.profit, b.profit)
+			if before ~= nil then
+				return before
+			end
+		end
 		if a.craftable ~= b.craftable then
 			return a.craftable
 		end
@@ -427,6 +448,9 @@ function ns.GetMailMaterials()
 		accountTime = account and account.time or nil,
 	}
 	local cache = { names = {} }
+	if ns.IsProfitAvailable and ns.IsProfitAvailable() then
+		ns.ResetProfitCache() -- prices are read again for every refresh
+	end
 
 	-- The current character: the bags are live, the bank parts come from what was saved (when its bank was never saved the
 	-- client's live count with every bank part is used instead), and the open mailbox is its mail.
@@ -619,6 +643,14 @@ local function AcquireBlock(index)
 	block.chance:SetWordWrap(false)
 	block.chance:Hide()
 
+	-- The crafting profit (Profit.lua), on the second line at the right; the profession's name stops before it. It has no width of its
+	-- own, so it is as wide as its text (nothing when there is no price to go by).
+	block.profit = block.header:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	block.profit:SetPoint("TOPRIGHT", block.header, "TOPRIGHT", -4, -20)
+	block.profit:SetHeight(12)
+	block.profit:SetJustifyH("RIGHT")
+	block.profit:SetWordWrap(false)
+
 	block.profession = block.header:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	block.profession:SetPoint("TOPLEFT", block.name, "BOTTOMLEFT", 0, -2)
 	block.profession:SetPoint("RIGHT", block.header, "RIGHT", -4, 0)
@@ -640,6 +672,9 @@ local function AcquireBlock(index)
 		GameTooltip:AddLine(" ")
 		if entry.skillUp and ns.AddSkillUpTooltip then
 			ns.AddSkillUpTooltip(GameTooltip, entry.skillUp)
+		end
+		if entry.profit and ns.AddProfitTooltip then
+			ns.AddProfitTooltip(GameTooltip, entry.profit)
 		end
 		if entry.isOwn then
 			GameTooltip:AddLine("Double-click to open it in your profession window.", 0.6, 0.8, 1, true)
@@ -722,7 +757,7 @@ local function UpdateOnlyMineLabel()
 		local long = "Only " .. (name:gsub("|", "||")) .. "'s recipes"
 		ui.measure:SetText(long)
 		local width = ui.measure:GetStringWidth()
-		if type(width) ~= "number" or width <= CHECK_LABEL_WIDTH then
+		if type(width) ~= "number" or width <= (ui.checkLabelWidth or CHECK_LABEL_WIDTH) then
 			label = long
 		end
 	end
@@ -735,11 +770,29 @@ RefreshWindow = function(data)
 		return
 	end
 	data = data or ns.GetMailMaterials()
+	-- The window can be resized: everything that has a width follows the one it has now (never less than the default).
+	local width = window:GetWidth()
+	ui.laidOutWidth = width
+	if type(width) ~= "number" or width < FRAME_WIDTH then
+		width = FRAME_WIDTH
+	end
+	local listWidth = width - (FRAME_WIDTH - LIST_WIDTH)
+	local nameArea = listWidth - (LIST_WIDTH - NAME_AREA_WIDTH)
+	ui.checkLabelWidth = width - (FRAME_WIDTH - CHECK_LABEL_WIDTH)
+	ui.showOthers.Text:SetWidth(ui.checkLabelWidth)
+	ui.emptyText:SetWidth(listWidth - 12)
+	if ui.filter.SetWidth then
+		ui.filter:SetWidth(width - 32)
+	end
 	local snapshot = data.snapshot
 	local showOthers = not (settings and settings.showOthers == false)
 
 	ui.showOthers:SetChecked(not showOthers)
 	UpdateOnlyMineLabel()
+	-- The sort button only shows with prices to go by (Profit.lua).
+	local profitOn = ns.IsProfitAvailable ~= nil and ns.IsProfitAvailable()
+	ui.sortButton:SetShown(profitOn and true or false)
+	ui.sortButton:SetText(settings and settings.sortProfit and "Sort: Profit" or "Sort: Name")
 	if snapshot and snapshot.time then
 		ui.source:SetText("From your mailbox, " .. Ago(snapshot.time))
 	elseif snapshot then
@@ -790,13 +843,15 @@ RefreshWindow = function(data)
 	end
 
 	local child = ui.scrollChild
-	child:SetWidth(LIST_WIDTH)
+	child:SetWidth(listWidth)
 	local y = 0
 	local groupIndex, blockIndex = 0, 0
 	for _, shown in ipairs(groups) do
 		local character = shown.character
 		groupIndex = groupIndex + 1
 		local group = AcquireGroup(groupIndex)
+		group.title:SetWidth(listWidth - 4)
+		group.info:SetWidth(listWidth - 4)
 		group.title:ClearAllPoints()
 		group.title:SetPoint("TOPLEFT", child, "TOPLEFT", 2, -y)
 		group.title:SetText(Escape(character.name) .. (character.isOwn and " (this character)" or ""))
@@ -811,20 +866,27 @@ RefreshWindow = function(data)
 			blockIndex = blockIndex + 1
 			local block = AcquireBlock(blockIndex)
 			block.entry = entry
+			block.header:SetWidth(listWidth)
 			block.header:ClearAllPoints()
 			block.header:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -y)
 			block.icon:SetTexture(entry.icon or QUESTION_ICON)
 			block.name:SetText(Escape(entry.name))
 			if ns.PlaceSkillUpText then
-				ns.PlaceSkillUpText(block.name, block.chance, block.icon, block.status, NAME_AREA_WIDTH, ns.FormatSkillUp and ns.FormatSkillUp(entry.skillUp) or nil)
+				ns.PlaceSkillUpText(block.name, block.chance, block.icon, block.status, nameArea, ns.FormatSkillUp and ns.FormatSkillUp(entry.skillUp) or nil)
 			end
 			block.profession:SetText(Escape(entry.profession))
+			block.profit:SetText(profitOn and ns.FormatProfit(entry.profit) or "")
+			-- The profession's name stops before the profit when there is one.
+			block.profession:ClearAllPoints()
+			block.profession:SetPoint("TOPLEFT", block.name, "BOTTOMLEFT", 0, -2)
+			block.profession:SetPoint("RIGHT", profitOn and block.profit or block.header, profitOn and "LEFT" or "RIGHT", -4, 0)
 			block.status:SetText(FormatStatus(entry))
 			block.header:Show()
 			y = y + HEADER_HEIGHT + 2
 
 			for lineIndex, reagent in ipairs(entry.reagents) do
 				local line = AcquireLine(block, lineIndex)
+				line:SetWidth(listWidth - HEADER_ICON_SIZE - 12)
 				line:ClearAllPoints()
 				line:SetPoint("TOPLEFT", child, "TOPLEFT", HEADER_ICON_SIZE + 10, -y)
 				line:SetText(FormatReagent(reagent, entry.isOwn))
@@ -915,8 +977,12 @@ local function GetDefaultPosition()
 		letterWidth = OPEN_MAIL_WIDTH
 	end
 	local left = mailRight + OPEN_MAIL_GAP + letterWidth + RECIPIENTS_PANEL_WIDTH + POSITION_MARGIN
-	left = math.max(0, math.min(left, uiWidth - FRAME_WIDTH))
-	return { point = "CENTER", relPoint = "CENTER", x = left + FRAME_WIDTH / 2 - uiWidth / 2, y = 0 }
+	local windowWidth = window and window:GetWidth()
+	if not (PlainNumber(windowWidth) and windowWidth > 0) then
+		windowWidth = FRAME_WIDTH
+	end
+	left = math.max(0, math.min(left, uiWidth - windowWidth))
+	return { point = "CENTER", relPoint = "CENTER", x = left + windowWidth / 2 - uiWidth / 2, y = 0 }
 end
 
 local function ApplyPosition()
@@ -935,7 +1001,8 @@ local function BuildWindow()
 	local frame = window
 	-- New frames start shown; hide it so the first Show() fires OnShow.
 	frame:Hide()
-	frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
+	local savedSize = settings and settings.size
+	frame:SetSize(savedSize and savedSize[1] or FRAME_WIDTH, savedSize and savedSize[2] or FRAME_HEIGHT)
 	ApplyPosition()
 	frame:SetFrameStrata("DIALOG")
 	frame:SetToplevel(true)
@@ -1012,6 +1079,35 @@ local function BuildWindow()
 		end
 	end)
 
+	-- Orders each character's recipes by crafting profit instead of the usual order (shown by RefreshWindow when Auctionator prices
+	-- are available). On the row of the check box, at the right: the label of the check box is far shorter than the row.
+	ui.sortButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	ui.sortButton:SetSize(SORT_BUTTON_WIDTH, SORT_BUTTON_HEIGHT)
+	ui.sortButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -16, -47)
+	ui.sortButton:SetNormalFontObject("GameFontNormalSmall")
+	ui.sortButton:SetText("Sort: Name")
+	ui.sortButton:Hide()
+	ui.sortButton:SetScript("OnClick", function()
+		if settings then
+			settings.sortProfit = not settings.sortProfit
+		end
+		ui.scroll:SetVerticalScroll(0)
+		RefreshWindow()
+	end)
+	ui.sortButton:SetScript("OnEnter", function(self)
+		if GameTooltip then
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText("Sort order")
+			GameTooltip:AddLine("Name: craftable recipes first, then the fewest items missing, then by name. Profit: the most profitable crafts first (Auctionator prices), the ones without a price last. Saved for all your characters.", 0.8, 0.8, 0.8, true)
+			GameTooltip:Show()
+		end
+	end)
+	ui.sortButton:SetScript("OnLeave", function()
+		if GameTooltip then
+			GameTooltip:Hide()
+		end
+	end)
+
 	ui.partial = frame:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 	ui.partial:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -70)
 	ui.partial:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -16, -70)
@@ -1054,6 +1150,88 @@ local function BuildWindow()
 	ui.footer:SetJustifyH("LEFT")
 	ui.footer:SetWordWrap(false)
 	ui.footer:SetText("Double-click one of your recipes to open it in your profession window.")
+
+	-- Resizable from the grip in the bottom right corner, like the chat frame. The default size is the smallest one. A double-click on
+	-- the grip goes back to the default size.
+	local function Bounds()
+		if ns.GetWindowBounds then
+			return ns.GetWindowBounds(FRAME_WIDTH, FRAME_HEIGHT)
+		end
+		return FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH * 2, FRAME_HEIGHT * 2
+	end
+	frame:SetResizable(true)
+	frame:SetResizeBounds(Bounds())
+	ui.grip = CreateFrame("Button", nil, frame)
+	ui.grip:SetSize(16, 16)
+	ui.grip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
+	ui.grip:SetFrameLevel(frame:GetFrameLevel() + 10)
+	ui.grip:EnableMouse(true)
+	ui.grip:RegisterForClicks("LeftButtonUp")
+	ui.grip.texture = ui.grip:CreateTexture(nil, "ARTWORK")
+	ui.grip.texture:SetAllPoints(ui.grip)
+	ui.grip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+	local gripHighlight = ui.grip:CreateTexture(nil, "HIGHLIGHT")
+	gripHighlight:SetAllPoints(ui.grip)
+	gripHighlight:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+	-- Lets go of the grip: the size is kept inside the bounds and saved (nothing is saved for the default size), and so is the position.
+	local function StopSizing()
+		ui.grip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+		frame:StopMovingOrSizing()
+		local minWidth, minHeight, maxWidth, maxHeight = Bounds()
+		local width = math.max(minWidth, math.min(maxWidth, math.floor(frame:GetWidth() + 0.5)))
+		local height = math.max(minHeight, math.min(maxHeight, math.floor(frame:GetHeight() + 0.5)))
+		if width ~= frame:GetWidth() or height ~= frame:GetHeight() then
+			frame:SetSize(width, height)
+		end
+		if settings then
+			settings.size = (width ~= FRAME_WIDTH or height ~= FRAME_HEIGHT) and { width, height } or nil
+		end
+		SavePosition()
+	end
+	ui.grip:SetScript("OnMouseDown", function(_, mouseButton)
+		if mouseButton == "LeftButton" then
+			ui.grip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+			frame:SetResizeBounds(Bounds())
+			frame:StartSizing("BOTTOMRIGHT")
+		end
+	end)
+	ui.grip:SetScript("OnMouseUp", StopSizing)
+	ui.grip:SetScript("OnDoubleClick", function()
+		frame:StopMovingOrSizing()
+		frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
+		StopSizing()
+	end)
+	ui.grip:SetScript("OnEnter", function(self)
+		if GameTooltip then
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText("Resize")
+			GameTooltip:AddLine("Drag to resize the window. Double-click to go back to the default size.", 0.8, 0.8, 0.8, true)
+			GameTooltip:Show()
+		end
+	end)
+	ui.grip:SetScript("OnLeave", function()
+		if GameTooltip then
+			GameTooltip:Hide()
+		end
+	end)
+	-- A new width is laid out again; a new height only shows more rows.
+	frame:SetScript("OnSizeChanged", function(_, newWidth)
+		if ui.laidOutWidth == newWidth or ui.relayoutPending then
+			return
+		end
+		local function Relayout()
+			ui.relayoutPending = false
+			if frame:IsShown() then
+				RefreshWindow()
+			end
+		end
+		if C_Timer and C_Timer.After then
+			ui.relayoutPending = true
+			C_Timer.After(0, Relayout)
+		else
+			Relayout()
+		end
+	end)
 
 	frame:SetScript("OnShow", function()
 		RefreshWindow()
@@ -1244,6 +1422,11 @@ local function InitData(db)
 	if type(settings.showOthers) ~= "boolean" then
 		settings.showOthers = true
 	end
+	if type(settings.sortProfit) ~= "boolean" then
+		settings.sortProfit = false
+	end
+	-- (a copy of this file loaded alone has no Core.lua and keeps no size)
+	settings.size = ns.CleanWindowSize and ns.CleanWindowSize(settings.size, FRAME_WIDTH, FRAME_HEIGHT) or nil
 	-- (Core.lua cleans it; a copy of this file loaded alone keeps no hidden professions)
 	settings.hiddenProfessions = ns.CleanProfessionSet and ns.CleanProfessionSet(settings.hiddenProfessions) or {}
 	local position = settings.position

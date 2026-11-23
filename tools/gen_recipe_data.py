@@ -9,7 +9,8 @@ The data is Blizzard's game data (DB2 tables) for the WoW Forever client, downlo
   ItemXItemEffect   which item effects an item has (ItemID, ItemEffectID)
   ItemEffect        what an effect does: TriggerType 6 ("on learn") with the SpellID it teaches
   SpellReagents     the ingredients of a spell: Reagent_0..7 (item IDs) and ReagentCount_0..7
-  SpellEffect       what a spell does: Effect 24 ("create item") with the item it makes in EffectItemType
+  SpellEffect       what a spell does: Effect 24 ("create item") with the item it makes in EffectItemType and, in EffectBasePointsF, how
+                    many (0 where the game decides it elsewhere; only counts above 1 are kept)
   SkillLine         the name of a skill line (DisplayName_lang, English here), for the lines the recipes belong to
 
 The downloaded files are untrusted: they are kept in their own cache folder and only parsed as data (csv module).
@@ -33,7 +34,7 @@ TABLES = {
     "ItemXItemEffect": ("ItemID", "ItemEffectID"),
     "ItemEffect": ("ID", "TriggerType", "SpellID"),
     "SpellReagents": ("SpellID",) + tuple("Reagent_%d" % i for i in range(REAGENT_SLOTS)) + tuple("ReagentCount_%d" % i for i in range(REAGENT_SLOTS)),
-    "SpellEffect": ("SpellID", "EffectIndex", "Effect", "EffectItemType"),
+    "SpellEffect": ("SpellID", "EffectIndex", "Effect", "EffectItemType", "EffectBasePointsF"),
     "SkillLine": ("ID", "DisplayName_lang"),
 }
 
@@ -51,6 +52,7 @@ SANITY_THRESHOLDS = {2330: (55, 95)}  # Minor Healing Potion: yellow 55, grey 95
 SANITY_TEACHERS = {6617: 5640, 2335: 2555}  # Recipe: Rage Potion, Recipe: Swiftness Potion
 SANITY_REAGENTS = {6617: [5635, 1, 2450, 1, 3371, 1], 3170: [2447, 1, 2449, 2, 3371, 1]}  # Rage Potion, Weak Troll's Blood Potion
 SANITY_OUTPUTS = {6617: 5631, 3170: 3382}
+SANITY_OUTPUT_COUNTS = {2659: 2}  # Smelt Bronze makes 2 Bronze Bars (the count of every other sample above is 1, so it is not listed)
 SANITY_SKILL_LINES = {6617: [171], 3170: [171], 2538: [185], 2657: [186], 461692: [165, 197]}  # Alchemy, Cooking, Mining, one in two lines
 # More ingredient and output samples, from other professions: Cooking 2538 and Mining (smelting) 2657
 SANITY_REAGENTS.update({2538: [2672, 1], 2657: [2770, 1]})
@@ -92,6 +94,14 @@ def to_int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def to_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and abs(number) != float("inf") else None
 
 
 def build(cache_dir, refresh):
@@ -167,6 +177,7 @@ def build(cache_dir, refresh):
             reagents[spell] = [value for item, count in counts.items() for value in (item, count)]  # dicts keep insertion order
 
     outputs = {}  # recipe spell -> the item its first "create item" effect makes
+    output_counts = {}  # recipe spell -> how many of it that effect makes, only when more than 1 (0 and 1 are one item)
     first_effect = {}
     for row in spell_effects:
         spell, index, effect, item = to_int(row["SpellID"]), to_int(row["EffectIndex"]), to_int(row["Effect"]), to_int(row["EffectItemType"])
@@ -174,6 +185,11 @@ def build(cache_dir, refresh):
             if spell not in first_effect or (index or 0) < first_effect[spell]:
                 first_effect[spell] = index or 0
                 outputs[spell] = item
+                count = to_float(row["EffectBasePointsF"])
+                if count is not None and count > 1 and count == int(count):
+                    output_counts[spell] = int(count)
+                else:
+                    output_counts.pop(spell, None)
 
     # Recipes: spells with skill-up thresholds or ingredients. Gathering abilities have neither and are left out.
     skill_lines = {}  # recipe spell -> sorted list of its profession skill lines (several when a spell belongs to more than one)
@@ -183,6 +199,7 @@ def build(cache_dir, refresh):
             if len(lines_of[spell]) > 1:
                 stats["several_lines"] += 1
     outputs = {spell: item for spell, item in outputs.items() if spell in skill_lines}
+    output_counts = {spell: count for spell, count in output_counts.items() if spell in outputs}
 
     # English names of the skill lines the recipes belong to (the addon prefers the client's own name when it knows one).
     used_lines = {line for lines in skill_lines.values() for line in lines}
@@ -210,10 +227,16 @@ def build(cache_dir, refresh):
     for spell, expected in SANITY_OUTPUTS.items():
         if outputs.get(spell) != expected:
             raise SystemExit("sanity check failed: spell %d makes item %s, expected %s" % (spell, outputs.get(spell), expected))
+    for spell, expected in SANITY_OUTPUT_COUNTS.items():
+        if output_counts.get(spell) != expected:
+            raise SystemExit("sanity check failed: spell %d makes %s items, expected %s" % (spell, output_counts.get(spell), expected))
+    for spell in SANITY_OUTPUTS:
+        if spell in output_counts:
+            raise SystemExit("sanity check failed: spell %d makes %d items, expected one" % (spell, output_counts[spell]))
     for spell, expected in SANITY_SKILL_LINES.items():
         if skill_lines.get(spell) != expected:
             raise SystemExit("sanity check failed: spell %d is in skill line %s, expected %s" % (spell, skill_lines.get(spell), expected))
-    return thresholds, teachers, skill_lines, reagents, outputs, line_names, stats
+    return thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, stats
 
 
 def pack(lines, entries, width=118):
@@ -228,7 +251,7 @@ def pack(lines, entries, width=118):
         lines.append(current)
 
 
-def render(thresholds, teachers, skill_lines, reagents, outputs, line_names):
+def render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names):
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     lines = [
         "local addonName, ns = ...",
@@ -237,12 +260,13 @@ def render(thresholds, teachers, skill_lines, reagents, outputs, line_names):
         "-- Source: Blizzard game data (DB2 tables) via wago.tools, WoW Forever build %s." % BUILD,
         "--   SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect and SkillLine: " + (BASE_URL % "<table>") + "?build=" + BUILD,
         "-- Generated: %s. %d recipes with skill-up thresholds, %d recipes with a teaching item, %d recipes with a skill line," % (today, len(thresholds), len(teachers), len(skill_lines)),
-        "--   %d with ingredients and %d with an item they make; %d skill line names." % (len(reagents), len(outputs), len(line_names)),
+        "--   %d with ingredients and %d with an item they make (%d of them make more than one); %d skill line names." % (len(reagents), len(outputs), len(output_counts), len(line_names)),
         "-- ns.RecipeThresholds[spellID] = { yellow, grey }: the skill where the recipe turns yellow and where it turns grey (orange",
         "--   is below yellow, green is floor((yellow + grey) / 2)). ns.RecipeTeachers[spellID] = lowest item ID that teaches it.",
         "-- ns.RecipeSkillLines[spellID] = the profession skill line (GetProfessionInfo's skillLine) the recipe belongs to, or a sorted",
         "--   list { line, line } for the few recipes that belong to several.",
         "-- ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... } (flat); ns.RecipeOutputs[spellID] = the item it makes.",
+        "-- ns.RecipeOutputCounts[spellID] = how many of that item one craft makes, only for the recipes that make more than one.",
         "-- ns.SkillLineNames[skillLine] = the English name of the skill line (only the lines the recipes belong to).",
         "",
         "ns.RecipeThresholds = {",
@@ -260,6 +284,8 @@ def render(thresholds, teachers, skill_lines, reagents, outputs, line_names):
         lines.append("[%d]={%s}," % (spell, ",".join(str(value) for value in reagents[spell])))
     lines += ["}", "", "ns.RecipeOutputs = {"]
     pack(lines, ["[%d]=%d," % (spell, outputs[spell]) for spell in sorted(outputs)])
+    lines += ["}", "", "ns.RecipeOutputCounts = {"]
+    pack(lines, ["[%d]=%d," % (spell, output_counts[spell]) for spell in sorted(output_counts)])
     lines += ["}", "", "ns.SkillLineNames = {"]
     pack(lines, ['[%d]="%s",' % (line, line_names[line].replace("\\", "\\\\").replace('"', '\\"')) for line in sorted(line_names)])
     lines += ["}", ""]
@@ -274,14 +300,14 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.cache, exist_ok=True)
-    thresholds, teachers, skill_lines, reagents, outputs, line_names, stats = build(args.cache, args.refresh)
+    thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, stats = build(args.cache, args.refresh)
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
     with open(OUTPUT, "w", encoding="ascii", newline="\n") as fh:
-        fh.write(render(thresholds, teachers, skill_lines, reagents, outputs, line_names))
+        fh.write(render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names))
     print("build %s: %d recipes with thresholds, %d teaching items (profession rows %d, without thresholds %d, invalid %d, conflicting %d)"
           % (BUILD, len(thresholds), len(teachers), stats["rows"], stats["no_thresholds"], stats["invalid"], stats["conflicting"]))
-    print("%d skill lines (%d recipes in several), %d with ingredients (%d bad slots), %d with an output, %d skill line names"
-          % (len(skill_lines), stats["several_lines"], len(reagents), stats["bad_reagents"], len(outputs), len(line_names)))
+    print("%d skill lines (%d recipes in several), %d with ingredients (%d bad slots), %d with an output (%d make more than one), %d skill line names"
+          % (len(skill_lines), stats["several_lines"], len(reagents), stats["bad_reagents"], len(outputs), len(output_counts), len(line_names)))
     print("wrote", OUTPUT)
 
 

@@ -1,6 +1,6 @@
 # Jimmy's Utils - full guide
 
-A World of Warcraft: Forever addon with five small utilities (and a minimap button that opens the options window and the mail
+A World of Warcraft: Forever addon with six small utilities (and a minimap button that opens the options window and the mail
 materials, see [Minimap button](#minimap-button)):
 
 - **Stat Weight** - adds one line to the tooltip of every equippable item:
@@ -19,6 +19,8 @@ materials, see [Minimap button](#minimap-button)):
 - **Recipe materials in your mail** - a window that lists the recipes your characters know which use items waiting in your
   mailbox, with how many of each ingredient they have (bags, bank and mail, saved for the characters you are not playing) and how many they
   still lack, so you can see which of your other characters could craft something with the mail.
+- **Crafting profit** - with Auctionator installed, what a recipe earns when crafted and sold at the auction house, shown in the recipes
+  window, the materials window and the profession window's own recipe list (through its Filter menu), see [Crafting profit](#crafting-profit).
 
 Each of the four features (stat weight scores, range check, recipe lookup, mail) can be switched on and off on its own, see
 [Feature toggles](#feature-toggles).
@@ -237,6 +239,8 @@ The **Recipes** tab explains this, shows the current key (or how to set one), th
 a **Forget saved recipes** button (it asks for a second click). Saved recipes are listed under Saved data below. A character that
 drops a profession is taken off the recipes of that profession when the game reports its professions (at login and when skills change).
 
+**Resizing.** The recipes window has a grip in its bottom right corner (like the chat frame's): drag it to make the window wider or taller (the default size is the smallest, the largest is twice that or what the screen holds), double-click it to go back to the default size. Everything in the window follows the width; the size is remembered for all your characters (`recipeLookup.size`).
+
 #### Skill-up chance and recipe items
 
 The game does not tell addons the chance of a skill-up, only the colour of a recipe (orange, yellow, green or grey). Jimmy's Utils
@@ -259,7 +263,7 @@ Wowhead window shows. Recipes the game data has no teaching item for (trainer, q
 
 **Data source.** `Data/RecipeData.lua` is generated and must not be edited. It holds `ns.RecipeThresholds[spellID] = { yellow, grey }`,
 `ns.RecipeTeachers[spellID] = itemID` (the recipe ID the profession window uses is the spell ID), `ns.RecipeSkillLines[spellID] = skillLineID` (a sorted list `{ line, line }` for the few recipes that belong to several),
-`ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... }`, `ns.RecipeOutputs[spellID] = itemID` and `ns.SkillLineNames[skillLineID] = "Alchemy"` (the English name of
+`ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... }`, `ns.RecipeOutputs[spellID] = itemID`, `ns.RecipeOutputCounts[spellID] = count` (only for the recipes that make more than one item) and `ns.SkillLineNames[skillLineID] = "Alchemy"` (the English name of
 each skill line the recipes use), taken from the SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect and SkillLine tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
 Blizzard's game data; this addon is not affiliated with or endorsed by Blizzard. To regenerate it for a newer client build, change the `BUILD`
 constant in `tools/gen_recipe_data.py` and run, from the addon folder, `python -I tools/gen_recipe_data.py` (Python 3, standard library only;
@@ -320,6 +324,7 @@ items you mailed to it from another character since its last scan).
 
 The check box **Only <name>'s recipes** at the top of the window ("Only my recipes" when the name does not fit; saved, off by default) limits the list to the current character.
 
+- **Resizing.** A grip in the bottom right corner (like the chat frame's) resizes the window: drag it, double-click it to go back to the default size, which is also the smallest (the largest is twice that or what the screen holds). The rows follow the width, a taller window shows more of them, and the size is remembered with the position (`mailMaterials.size`).
 - **Opening it.** Only `/ju materials` opens it (and closes it again); it never opens by itself. Close it with its close button or Escape.
   While it is open it follows mailbox and bag changes. It can be moved; its position is remembered. Until you move it, it sits to the
   right of the mailbox, the open letter and the recent recipients panel.
@@ -346,6 +351,52 @@ The check box **Only <name>'s recipes** at the top of the window ("Only my recip
 
 The **Mail** tab ends with a one-line reminder of the `/ju materials` command.
 
+### Crafting profit
+
+With [Auctionator](https://www.curseforge.com/wow/addons/auctionator) installed (an optional dependency), Jimmy's Utils reads its prices through
+Auctionator's public API and shows what a recipe earns when its result is sold at the auction house. The formula is Auctionator's own:
+
+```
+profit = auction price of the result x items made x 0.95 - cost of the ingredients
+```
+
+An ingredient costs its vendor price when Auctionator knows one, else its auction price (a vendor price more than five times the auction price is
+passed over for the auction price, as Auctionator does). An ingredient slot with alternative items (the quality tiers of an herb) counts at its
+cheapest priced item. The number of items a craft makes is read from the profession window when a recipe is saved (`outputCount`), from the bundled data
+(`ns.RecipeOutputCounts`, only the recipes that make more than one) for a recipe that was never saved, and is 1 when nothing says. When the result
+has no price the profit is unknown and shows as a grey `?`; a price of 0 counts as no price. Vendor-only ingredients (thread, vials, flux) often have no
+price until Auctionator has seen them at a merchant, so when only some ingredients are unpriced the profit is *partial*: those ingredients count as free and
+the profit is shown greyed with a `~` before it. A profit of 0 or more is green, a loss red.
+The tooltip of a recipe (in the recipes window and the materials window) adds what the ingredients cost, what the result sells for, how old
+the oldest auction data used is and, for a partial profit, which ingredients have no price yet (visit a vendor or scan the auction house). Items are priced by
+their base item ID, so gear with a random suffix gets the price of its base item. Prices are read again on every refresh of a window; Auctionator's own data only changes when you scan the auction house.
+
+- **Recipes window and materials window.** When prices are available a **Sort: Name** / **Sort: Profit** button appears in the header (the choice is saved
+  for all your characters, with each window's settings: `recipeLookup.sortProfit`, `mailMaterials.sortProfit`) and every recipe shows its profit on its
+  second line. Sorted by profit the most profitable recipes come first (a partial profit counts with its value, after a fully priced one of the same value), then the losses, and the recipes whose profit is unknown last, each group in the window's usual order;
+  in the materials window this orders the recipes inside each character's group.
+- **Blizzard's recipe list.** The **Filter** menu of the profession window's recipe list gets a **Sort by (Jimmy's Utils)** section with the radios
+  **Default** (the client's own order) and **Crafting profit** (saved as `profit.listSort`: `blizzard` or `profit`; shown only while profits are available).
+  With the profit sort the learned recipes are listed flat by profit, highest first (a partial profit counts with its value, recipes whose profit is unknown
+  last, ties by name), then Blizzard's own divider and the unlearned recipes in the client's order. The list is flat while it is sorted: the client's category headers
+  are not shown and so a category's collapsed state is not remembered (the client's own list comes back, as it was, with **Default**); your favorites are listed
+  first (sorted too) as well as in their place, because the client selects them by that row. It reorders the client's own list: the rows are the client's, so a click on
+  one is the client's own click, and the addon never selects a recipe or rebuilds the page itself. A list that is already in that order is left alone (which
+  keeps the selection), the profession window of another player or an NPC keeps the client's list, and if the sort ever fails it turns itself off with one
+  message. It does not re-sort on its own when a price changes: it follows the next time the client rebuilds its list or you choose the radio again. The
+  section is not added while the gamepad interface is on (the client opens that menu itself and a section added by an addon would taint it; it comes
+  back for mouse and keyboard); under the gamepad interface the **Sort the profession window's recipe list by profit** check box in the *Recipes* tab does the same
+  as the menu (and is how to go back to Default there). **SkillUp Forever** sorts this list itself (its own *Sort by* has *Highest craft profit*): while it is loaded this addon
+  never touches the list, and the radio is shown disabled saying so.
+- **`/ju profit`** lists the learned recipes of the open profession in chat, in the order of the Filter-menu sort (by profit, highest first, a partial profit by
+  its value, unknown last, then by name) with their value, cost and profit; `/ju profit <name>` shows where one recipe's numbers come from (the price of its
+  result by link and by item ID, and every ingredient's vendor and auction price).
+- **Option.** *Recipes* tab: **Show crafting profit (needs Auctionator)**, on by default. Off hides the sort buttons and the profits, puts the client's order back
+  in the profession list and reads nothing from Auctionator.
+- **Without Auctionator** (not loaded, loaded after this addon, or its price database not made yet at login: the addon notices) all of that behaves as if it were off: the Filter menu has no section and
+  the list is the client's, the windows sort by name without their sort buttons, and the option shows unchecked and greyed out with a note. Nothing you chose is
+  overwritten (the option, the list sort and the windows' sorts stay saved), so it all comes back as it was once Auctionator is there.
+
 ### Mail tab and recent mail recipients
 
 Whenever a letter is sent successfully, its recipient goes to the top of a list of the last 10 recipients of the realm you are on
@@ -364,18 +415,12 @@ features (while it is off the panel is hidden, no recipients are recorded and th
 kept), a **Clear recent recipients** button, which empties the list of the current realm, and the **Professions shown in the window** check boxes of the
 materials window (see [Recipe materials in your mail](#recipe-materials-in-your-mail)).
 
-### Mailbox buttons
+### Mailbox button
 
-Two small buttons are added to Blizzard's mailbox. Both are shown only while the mail features are on (they appear or disappear at once when
+A small button is added to Blizzard's mailbox. It is shown only while the mail features are on (it appears or disappears at once when
 you switch them with `/ju mail on` / `off` or the check box).
 
-- **Take all** sits at the bottom left of the open letter window, on the row of Blizzard's **Reply**, **Delete** and **Close** buttons (which fill
-  the right side, so there is no overlap). It takes every item and all the money of the open letter in one click, like shift-clicking the letter
-  in the inbox. It is disabled when the letter has nothing to take, and when the letter asks for **cash on delivery**: a click then (or a
-  letter whose cash on delivery amount the game hides) takes nothing and says "This letter asks for cash on delivery; take its items one by
-  one to pay." Hover it for its tooltip; on a cash on delivery letter it explains why it is disabled. It follows the letter that is open and
-  the inbox updates, so it greys out once the letter has been emptied.
-- **Materials** is a small button with the addon's icon in the title bar of the mailbox, just left of its close button. It shows on both the
+- The button has the addon's icon in the title bar of the mailbox, just left of its close button. It shows on both the
   **Inbox** and the **Send Mail** tab, opens or closes the **Materials in your mail** window exactly like `/ju materials`, and has the tooltip
   "Materials in your mail" (recipes your characters know that use items in your mail). The window still never opens by itself.
 
@@ -478,15 +523,10 @@ Stats with a weight of 0 do not contribute. The tooltip line is hidden for items
   `MailFrame` and follows `SendMailFrame` with `HookScript` on `OnShow` / `OnHide`; filling the "To:" box is a plain `SetText` on
   `SendMailNameEditBox`; focus and cursor are never changed. The panel re-anchors to `OpenMailFrame` while a letter is open. A recipient that is a secret value is ignored, never compared or concatenated. `MailFrame` belongs to
   `Blizzard_MailFrame`, which is always loaded; if it is not there when the addon starts, the panel is created when that addon loads.
-- **Mailbox buttons (Mail.lua).** Both are plain child frames created by the addon: "Take all" (`UIPanelButtonTemplate`, 76x22, `BOTTOMLEFT` 6, 4 of
-  `OpenMailFrame`, to the left of Blizzard's Reply button, which starts 88 px from the left edge) and the materials icon (20x20, `RIGHT` of
-  `MailFrame.CloseButton` with x -2; fallback `MailFrameCloseButton`, then the top right corner of `MailFrame`). They are created when the mailbox exists (at
-  load, at `ADDON_LOADED` "Blizzard_MailFrame" and at `MAIL_SHOW` for a letter frame that appears later) and are shown or hidden by `ns.SetMailEnabled`. Blizzard's code
-  is only touched with `HookScript` (`OpenMailFrame` `OnShow`) and `hooksecurefunc(OpenMailFrame, "Update", ...)` (a post-hook, run when another letter is
-  opened while one is showing); the button also listens to `MAIL_INBOX_UPDATE` while visible. The open letter is `InboxFrame.openMailID`; the state is read
-  with `pcall(GetInboxHeaderInfo, index)` (money, cash on delivery amount and item count; a secret money or item count counts as something to take, a secret
-  or missing cash on delivery amount as cash on delivery) and a click calls `pcall(AutoLootMailItem, index)` only when the letter is not cash on delivery, the same
-  condition Blizzard uses for shift-click. The materials button calls `ns.HandleMaterialsCommand("")`.
+- **Mailbox button (Mail.lua).** A plain child frame created by the addon: the materials icon (20x20, `RIGHT` of
+  `MailFrame.CloseButton` with x -2; fallback `MailFrameCloseButton`, then the top right corner of `MailFrame`). It is created when the mailbox exists (at
+  load and at `ADDON_LOADED` "Blizzard_MailFrame") and is shown or hidden by `ns.SetMailEnabled`. Nothing of Blizzard's letter frame (`OpenMailFrame`) is hooked
+  for it. Its click calls `ns.HandleMaterialsCommand("")`.
 - **Recipe materials in your mail.** Every `MAIL_INBOX_UPDATE` (it fires repeatedly) reads the inbox at once and replaces the snapshot, so the last state
   before the mailbox closes is never lost; only the refresh of an open window waits half a second after the last one. Nothing is read
   after `MAIL_CLOSED`, and nothing before the first `MAIL_SHOW` (so after a `/reload` at an open mailbox it starts working at the next visit). It reads `GetInboxNumItems()` (the second result, the total, tells when there are more letters than listed),
@@ -548,11 +588,9 @@ A quick first session:
    should list that name afterwards (not before the mail went out, and not for a letter that failed, for example with a full
    mailbox). Click the name to fill in the "To:" box (also while a letter is open: check the panel does not cover it), right-click it to remove it, and check `/ju mail off` (the panel disappears, new recipients are not recorded, `/ju materials` says the mail features are off),
    `/ju mail on` and `/ju mail clear`.
-   Mailbox buttons: open the mailbox and check the small icon button just left of its close button on both tabs (tooltip "Materials in your mail"; a click
-   opens and closes the materials window like `/ju materials`, and nothing opens by itself). Open a letter with items or money: **Take all** at the bottom left of the letter
-   window must not overlap Reply, Delete or Close, and takes everything in one click; open an empty letter (it is greyed out) and a cash on delivery letter (greyed out,
-   tooltip explains why; nothing is taken). Open another letter while one is open (the button follows), take the items by hand (it greys out), and check `/ju mail off` hides
-   both buttons at once and `/ju mail on` brings them back.
+   Mailbox button: open the mailbox and check the small icon button just left of its close button on both tabs (tooltip "Materials in your mail"; a click
+   opens and closes the materials window like `/ju materials`, and nothing opens by itself). Open a letter with items or money and check that the addon adds no button
+   to it, then check `/ju mail off` hides the icon at once and `/ju mail on` brings it back.
    Also try each feature's off switch (`/ju stats off`, `/ju range`, `/ju recipes off`, `/ju mail off`, or the check boxes) and `/ju status`.
 10. Recipe materials: open the bank (and the account bank) once on each character, then send one of your characters a letter holding an ingredient of a recipe it knows (or
     use mail you already have). Log in on another character of the same realm: `/ju materials` should list it under its own header with `bags ... ago, bank ... ago`, and with the
@@ -571,6 +609,11 @@ A quick first session:
     turn on the arrow in the world, and print the zone and a shift-clickable link. Try `45,2 67,8`, `45 67`, `/ju pin` alone (the pin should land under your arrow on the map), a bad value (`/ju pin 120 5`, `/ju pin a b`)
     for the messages, a zone or instance that does not allow pins (the command should say so), and `/ju pin clear` with and without a pin.
 14. On a non-English client the "Equip:" fallback is off; note which effects only appear as "Equip:" text.
+15. Crafting profit (with Auctionator and some auction house scans): open a profession and its **Filter** menu: it should end with **Sort by (Jimmy's Utils)**
+    (Default, Crafting profit); choosing Crafting profit should reorder the recipe list (learned recipes by profit, then the unlearned ones) without losing your
+    selection, and Default should put the client's order back. `/ju profit` lists the same order in chat. Compare a recipe's profit with Auctionator's own line in the
+    recipe's window. `/ju recipes <item>` and `/ju materials` should show a profit on each recipe and a **Sort** button. Untick **Show crafting profit** in the Recipes
+    tab (or disable Auctionator and `/reload`): all of that disappears, the list is Blizzard's again and nothing errors; enable Auctionator again and your choices are back.
 
 ## Files
 
@@ -585,6 +628,7 @@ A quick first session:
 - `Inventory.lua` - the saved bags, bank, account bank and mailbox of each character, and mail sent to your own characters
 - `MailMaterials.lua` - the recipe materials in your mail: inbox scan, the window (grouped by character) and `/ju materials`
 - `Minimap.lua` - the minimap button, its saved position, the addon compartment callbacks and `/ju minimap`
+- `Profit.lua` - the crafting profit from Auctionator's prices (the formula, its text, the sort order), the sort of the profession window's recipe list and `/ju profit`
 - `Pin.lua` - the map pin command, `/ju pin`
 - `Media\MinimapIcon.tga` - the icon of the minimap button and of the addon compartment entry (64x64, 32-bit with alpha)
 - `Bindings.xml` - the "Find recipes using hovered item" key binding (loaded automatically, not listed in the `.toc`)
@@ -592,10 +636,10 @@ A quick first session:
 
 ### Saved data
 
-Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, its `hiddenProfessions` and `onlyMyProfessions` (the check box of the recipes window), last tab, and the
+Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, its `hiddenProfessions`, `onlyMyProfessions` (the check box of the recipes window) and the `size` of that window, last tab, and the
 saved recipes: `recipes`, `recipeKnownBy` with the characters that know each recipe as `Name-Realm`, and `itemNames` with the names
 of ingredients, and `recipeSkill` with each character's rank and maximum in each profession; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
-the materials window, `showOthers` and `hiddenProfessions`; `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
+the materials window, its `size`, `showOthers`, `hiddenProfessions` and `sortProfit`; and `profit` with the on/off of the crafting profit and the sort of the profession list (`enabled`, `listSort`); `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
 (with the times they were seen), and `accountBank` with the account bank's items; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the active profile, and the range check spell; older versions also kept `mailItems`, the last scan of the mailbox, here: it is moved into `inventory` at load). The variable names are unchanged from the
 addon's previous name, but the client stores them in a file named after the addon folder, i.e. now
 `WTF\Account\<account>\SavedVariables\JimmysUtils.lua` and `WTF\Account\<account>\<realm>\<character>\SavedVariables\JimmysUtils.lua`.

@@ -20,7 +20,8 @@ local addonName, ns = ...
 		recipes, recipeKnownBy, itemNames, recipeSkill, -- saved recipes and the profession skill per character, validated in Recipes.lua
 		mail = { enabled }, -- master switch of the recent recipients and the mail materials, validated in Mail.lua
 		mailRecipients = { [realmKey] = { names } }, -- recent mail recipients, validated in Mail.lua
-		mailMaterials = { position, showOthers, hiddenProfessions = { [lowercase profession] = true } }, -- the "materials in your mail" window and the professions it leaves out, validated in MailMaterials.lua
+		mailMaterials = { position, showOthers, hiddenProfessions = { [lowercase profession] = true }, sortProfit }, -- the "materials in your mail" window, the professions it leaves out and its profit sort, validated in MailMaterials.lua
+		profit = { enabled, listSort }, -- crafting profit from Auctionator prices and the sort of the profession window's recipe list, validated in Profit.lua
 		inventory = { ["Name-Realm"] = { bags, bagsTime, bank, bankTime, mail } }, -- item snapshots (and the last scan of the mailbox) per character, validated in Inventory.lua
 		accountBank = { items, time }, -- the account bank, validated in Inventory.lua
 		minimap = { hide, angle }, -- the minimap button, validated in Minimap.lua
@@ -140,6 +141,37 @@ function ns.MakeOpaque(frame)
 	solid:SetAllPoints(host)
 	solid:SetColorTexture(0.06, 0.06, 0.07, 1)
 	frame.jimmysOpaque = solid
+end
+
+-- The sizes a resizable window of this addon may have: at least its default size, at most twice that and what the screen holds.
+-- Returns minWidth, minHeight, maxWidth, maxHeight.
+function ns.GetWindowBounds(defaultWidth, defaultHeight)
+	local maxWidth, maxHeight = defaultWidth * 2, defaultHeight * 2
+	if UIParent and UIParent.GetWidth then
+		local ok, width, height = pcall(function() return UIParent:GetWidth(), UIParent:GetHeight() end)
+		if ok and not IsSecret(width) and IsFiniteNumber(width) and width > 0 then
+			maxWidth = math.max(defaultWidth, math.min(maxWidth, math.floor(width - 20)))
+		end
+		if ok and not IsSecret(height) and IsFiniteNumber(height) and height > 0 then
+			maxHeight = math.max(defaultHeight, math.min(maxHeight, math.floor(height - 20)))
+		end
+	end
+	return defaultWidth, defaultHeight, maxWidth, maxHeight
+end
+
+-- A saved window size { width, height } as it should be kept: whole numbers inside ns.GetWindowBounds, or nil when it is not a size
+-- (or is the default one).
+function ns.CleanWindowSize(size, defaultWidth, defaultHeight)
+	if type(size) ~= "table" or IsSecret(size) or not IsFiniteNumber(size[1]) or not IsFiniteNumber(size[2]) then
+		return nil
+	end
+	local minWidth, minHeight, maxWidth, maxHeight = ns.GetWindowBounds(defaultWidth, defaultHeight)
+	local width = math.max(minWidth, math.min(maxWidth, math.floor(size[1] + 0.5)))
+	local height = math.max(minHeight, math.min(maxHeight, math.floor(size[2] + 0.5)))
+	if width == defaultWidth and height == defaultHeight then
+		return nil
+	end
+	return { width, height }
 end
 
 function ns.Print(msg)
@@ -531,6 +563,7 @@ local HELP_LINES = {
 	"/ju mail - show whether the mail features (recent recipients and mail materials) are on; /ju mail on | off - turn them on or off",
 	"/ju mail clear - forget the recent mail recipients of this realm",
 	"/ju minimap - show or hide the minimap button; /ju minimap reset - move it back to its default place",
+	"/ju profit - list the open profession's learned recipes by crafting profit in chat (needs Auctionator); /ju profit <name> shows a recipe's prices",
 	"/ju pin - put the map pin where you stand",
 	"/ju pin <x> <y> - put the map pin in your current zone at those coordinates (percent, as the map shows them; for example /ju pin 45.2 67.8)",
 	"/ju pin clear - remove the map pin",
@@ -884,6 +917,12 @@ SlashCmdList["JIMMYSUTILS"] = function(msg)
 		else
 			ns.Print("The minimap button is not available.")
 		end
+	elseif command == "profit" then
+		if ns.HandleProfitCommand then
+			ns.HandleProfitCommand(rest)
+		else
+			ns.Print("Crafting profit is not available.")
+		end
 	elseif command == "pin" then
 		if ns.HandlePinCommand then
 			ns.HandlePinCommand(rest)
@@ -929,6 +968,9 @@ loader:SetScript("OnEvent", function(self, event, loadedName)
 	end
 	if ns.InitMailMaterials then
 		ns.InitMailMaterials(db, charDb)
+	end
+	if ns.InitProfit then
+		ns.InitProfit(db)
 	end
 	if ns.InitMinimap then
 		ns.InitMinimap(db)

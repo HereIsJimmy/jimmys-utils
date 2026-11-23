@@ -12,13 +12,13 @@ local addonName, ns = ...
 	lacks and is richer where both saved a recipe.
 
 	Saved data (validated in ns.InitRecipes, all keys are additive and optional):
-		JimmysStatWeightsDB.recipes = { [recipeID] = { name, icon, profession, output = itemID, reagents = { [itemID] = quantity },
+		JimmysStatWeightsDB.recipes = { [recipeID] = { name, icon, profession, output = itemID, outputCount = n, reagents = { [itemID] = quantity },
 			slots = { { items = { itemID, ... }, quantity = n } }, source = text } }
 			(source is the game's "where to get it" text; it is kept, but the window only shows it in a row's tooltip when there is one)
 		JimmysStatWeightsDB.recipeKnownBy = { [recipeID] = { ["Name-Realm"] = true } }
 		JimmysStatWeightsDB.itemNames = { [itemID] = name } -- names of ingredients, so a name can be looked up offline
 		JimmysStatWeightsDB.recipeSkill = { ["Name-Realm"] = { [lowercase profession] = { rank, max, time } } } -- profession skill per character, for the skill-up chance
-		JimmysStatWeightsDB.recipeLookup = { enabled = true, hiddenProfessions = { [lowercase profession] = true }, onlyMyProfessions = false } -- off: no recipes are learned and the lookup is closed; what is saved is kept; hiddenProfessions: professions the recipes window leaves out (Options > Recipes); onlyMyProfessions: the check box of the window, only the recipes of the professions the current character has
+		JimmysStatWeightsDB.recipeLookup = { enabled = true, hiddenProfessions = { [lowercase profession] = true }, onlyMyProfessions = false, sortProfit = false } -- off: no recipes are learned and the lookup is closed; what is saved is kept; hiddenProfessions: professions the recipes window leaves out (Options > Recipes); onlyMyProfessions: the check box of the window, only the recipes of the professions the current character has; sortProfit: the window lists the recipes by crafting profit (Profit.lua); size = { width, height }: the size the window was left at (see below)
 
 	Only basic reagent slots are saved (optional and finishing slots are skipped). The index reagent item -> recipes is kept
 	in memory and rebuilt at load and after every scan. "reagents" is the flat map of every ingredient item (what the index
@@ -59,6 +59,17 @@ local addonName, ns = ...
 	recipes, the professions or the skills, a spell name arriving, the window being opened on an item); BAG_UPDATE_DELAYED only
 	recolors the materials of the rows shown. Names of ingredients are only saved for items the saved recipes use; the others
 	are requested and shown without being saved.
+
+	Resizing: the window has a grip in its bottom right corner (the chat frame's look); its default size is its minimum, the maximum is
+	twice that or what the screen holds (ns.GetWindowBounds). Rows, texts, the profession bar and the check box label follow the width
+	(every refresh lays out from the width the window has then); a taller window shows more rows. The size is saved in
+	recipeLookup.size when the grip is let go (cleaned and clamped on load, nothing saved for the default size) and a double-click on the
+	grip goes back to the default size.
+
+	Crafting profit (Profit.lua, needs Auctionator): outputCount is how many items one craft makes (the schematic's quantityMin; the
+	bundled ns.RecipeOutputCounts and 1 are the fallbacks). When Auctionator prices are available each row shows its profit on the
+	detail line, and a button in the header switches the list between the usual order and highest profit first (the rows without a
+	price last, then the usual order). The profit is not part of the cached rows: it is read again on every refresh.
 
 	Every API result is read through pcall and skipped when it is a secret value; nothing is branched on a secret.
 	The profession window's own settings (for example "show unlearned") are never changed.
@@ -149,6 +160,7 @@ local SCAN_EVENTS = {
 local DEFAULT_LOOKUP = {
 	enabled = true,
 	onlyMyProfessions = false,
+	sortProfit = false,
 }
 
 -- Set in ns.InitRecipes.
@@ -378,6 +390,7 @@ local function InitData(database)
 		end
 	end
 	lookup.hiddenProfessions = ns.CleanProfessionSet(lookup.hiddenProfessions)
+	lookup.size = ns.CleanWindowSize(lookup.size, FRAME_WIDTH, FRAME_HEIGHT)
 
 	for recipeID, record in pairs(recipes) do
 		local valid = IsID(recipeID) and type(record) == "table"
@@ -400,6 +413,9 @@ local function InitData(database)
 			record.slots = CleanSlots(record.slots, record.reagents)
 			if not IsID(record.output) then
 				record.output = nil
+			end
+			if not IsID(record.outputCount) then
+				record.outputCount = nil
 			end
 			if type(record.source) ~= "string" or record.source == "" then
 				record.source = nil
@@ -886,12 +902,14 @@ local function ScanRecipe(recipeID, info, baseProfession, character, usedItems)
 	end
 
 	local existing = recipes[recipeID]
-	local reagents, slots, output
+	local reagents, slots, output, outputCount
 	local okSchematic, schematic = pcall(C_TradeSkillUI.GetRecipeSchematic, recipeID, false)
 	schematic = okSchematic and PlainTable(schematic) or nil
 	if schematic then
 		reagents, slots = ReadReagents(schematic)
 		output = ReadOutput(schematic, recipeID)
+		-- How many items one craft makes: quantityMin when it is a plain whole number of at least 1.
+		outputCount = IsID(schematic.quantityMin) and schematic.quantityMin or nil
 	end
 	if (not reagents or next(reagents) == nil) and existing then
 		reagents = existing.reagents
@@ -924,6 +942,7 @@ local function ScanRecipe(recipeID, info, baseProfession, character, usedItems)
 		icon = info.icon or (existing and existing.icon) or nil,
 		profession = profession,
 		output = output,
+		outputCount = outputCount or (existing and existing.outputCount) or nil,
 		reagents = reagents,
 		slots = slots,
 		source = source,
@@ -1803,7 +1822,7 @@ function ns.OpenRecipeInProfession(entry)
 	return true
 end
 
--- The saved recipes a character ("Name-Realm") knows, sorted by recipe ID: { recipeID, name, icon, profession, output,
+-- The saved recipes a character ("Name-Realm") knows, sorted by recipe ID: { recipeID, name, icon, profession, output, outputCount,
 -- reagents = { [itemID] = quantity }, slots = { { items = { itemID, ... }, quantity } } } (copies; the slots of a recipe
 -- saved without them are one per ingredient).
 function ns.GetKnownRecipes(character)
@@ -1840,6 +1859,7 @@ function ns.GetKnownRecipes(character)
 				icon = record.icon,
 				profession = record.profession,
 				output = record.output,
+				outputCount = record.outputCount,
 				reagents = reagents,
 				slots = slots,
 			}
@@ -1849,6 +1869,75 @@ function ns.GetKnownRecipes(character)
 		return a.recipeID < b.recipeID
 	end)
 	return list
+end
+
+-- What a craft of a recipe takes and makes, for the crafting profit (Profit.lua): the saved recipe's { recipeID, output, outputCount,
+-- reagents, slots } (the live saved tables: read only), else the bundled data's, else nil. A saved recipe lacking its output gets the
+-- bundled one; slots is nil for a recipe saved before they were kept. outputCount is nil unless a profession window gave it (the
+-- bundled counts, ns.RecipeOutputCounts, are Profit.lua's fallback).
+function ns.GetRecipeRecord(recipeID)
+	if not IsID(recipeID) then
+		return nil
+	end
+	local record = recipes and recipes[recipeID]
+	if record then
+		return {
+			recipeID = recipeID,
+			output = record.output or GetBundledOutput(recipeID),
+			outputCount = record.outputCount,
+			reagents = record.reagents,
+			slots = record.slots,
+		}
+	end
+	local reagents, slots = GetBundledReagents(recipeID)
+	if not reagents then
+		return nil
+	end
+	return { recipeID = recipeID, output = GetBundledOutput(recipeID), reagents = reagents, slots = slots }
+end
+
+-- The ingredient slots of a bundled recipe (one single-item slot per ingredient, see GetBundledReagents), or nil when the bundle has
+-- none for it or, with `reagents` given (a { [itemID] = quantity } map), when its ingredients are not those.
+function ns.GetBundledSlots(recipeID, reagents)
+	if not IsID(recipeID) then
+		return nil
+	end
+	local bundled, slots = GetBundledReagents(recipeID)
+	if bundled and (reagents == nil or SameReagents(bundled, reagents)) then
+		return slots
+	end
+end
+
+-- The same read from the open profession window's schematic (nil without one, or when it has no ingredients): for a recipe that is
+-- neither saved nor bundled.
+function ns.ReadRecipeSchematic(recipeID)
+	if not (IsID(recipeID) and C_TradeSkillUI and C_TradeSkillUI.GetRecipeSchematic) then
+		return nil
+	end
+	local ok, schematic = pcall(C_TradeSkillUI.GetRecipeSchematic, recipeID, false)
+	schematic = ok and PlainTable(schematic) or nil
+	if not schematic then
+		return nil
+	end
+	local reagents, slots = ReadReagents(schematic)
+	if not reagents or next(reagents) == nil then
+		return nil
+	end
+	if slots and #slots == 0 then
+		slots = nil
+	end
+	return {
+		recipeID = recipeID,
+		output = ReadOutput(schematic, recipeID) or GetBundledOutput(recipeID),
+		outputCount = IsID(schematic.quantityMin) and schematic.quantityMin or nil,
+		reagents = reagents,
+		slots = slots,
+	}
+end
+
+-- Is the open profession window the player's own (not linked, guild, NPC crafting or runeforging)? False when that cannot be told.
+function ns.IsOwnTradeSkillOpen()
+	return C_TradeSkillUI ~= nil and not ScanBlocked()
 end
 
 -- The same for the current character.
@@ -2464,6 +2553,11 @@ function ns.CreateProfessionFilter(options)
 	info:Hide()
 	filter.info = info
 	filter.infoHeight = 0
+	-- The room of a row of buttons (and of the info line), when the window it is in changes its width.
+	function filter:SetWidth(width)
+		options.width = width
+		info:SetWidth(width)
+	end
 	-- The width of a candidate text is measured on a hidden font string of the same font, against the width of the line.
 	local infoMeasure = parent:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	infoMeasure:Hide()
@@ -2653,6 +2747,14 @@ local function AcquireRow(index)
 	row.chance:SetWordWrap(false)
 	row.chance:Hide()
 
+	-- The crafting profit, on the detail line just before the Wowhead button (Profit.lua); the detail text stops before it. It has no
+	-- width of its own, so it is as wide as its text (nothing when there is no price to go by).
+	row.profit = row.frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	row.profit:SetPoint("RIGHT", row.frame, "TOPRIGHT", -(LINK_BUTTON_WIDTH + 8), -(ROW_TOP_HEIGHT - DETAIL_HEIGHT / 2 - 2)) -- centered on the detail line
+	row.profit:SetHeight(DETAIL_HEIGHT)
+	row.profit:SetJustifyH("RIGHT")
+	row.profit:SetWordWrap(false)
+
 	row.detail = row.frame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
 	row.detail:SetPoint("RIGHT", row.frame, "RIGHT", -(LINK_BUTTON_WIDTH + 8), 0)
@@ -2710,6 +2812,9 @@ local function AcquireRow(index)
 		if entry.skillUp then
 			GameTooltip:AddLine(" ")
 			ns.AddSkillUpTooltip(GameTooltip, entry.skillUp)
+		end
+		if entry.profit and ns.AddProfitTooltip then
+			ns.AddProfitTooltip(GameTooltip, entry.profit)
 		end
 		-- Only when the game gave one.
 		if entry.source then
@@ -2816,7 +2921,7 @@ local function UpdateOnlyMineLabel()
 		local long = "Only " .. (name:gsub("|", "||")) .. "'s professions"
 		ui.measure:SetText(long)
 		local width = ui.measure:GetStringWidth()
-		if type(width) ~= "number" or width <= CHECK_LABEL_WIDTH then
+		if type(width) ~= "number" or width <= (ui.checkLabelWidth or CHECK_LABEL_WIDTH) then
 			label = long
 		end
 	end
@@ -2829,6 +2934,18 @@ RefreshWindow = function()
 	end
 	local itemID = ui.itemID
 	local itemName = ns.GetItemName(itemID) or ("Item " .. itemID)
+
+	-- The window can be resized: everything that has a width follows the one it has now (never less than the default).
+	local width = window:GetWidth()
+	ui.laidOutWidth = width
+	if type(width) ~= "number" or width < FRAME_WIDTH then
+		width = FRAME_WIDTH
+	end
+	local listWidth = width - (FRAME_WIDTH - LIST_WIDTH)
+	ui.checkLabelWidth = width - (FRAME_WIDTH - CHECK_LABEL_WIDTH)
+	ui.onlyMine.Text:SetWidth(ui.checkLabelWidth)
+	ui.emptyText:SetWidth(listWidth - 12)
+	ui.filter:SetWidth(width - 32)
 
 	SetWindowTitle(window, "Recipes using " .. itemName)
 	ui.itemIcon:SetTexture(ReadItemIcon(itemID) or QUESTION_ICON)
@@ -2881,13 +2998,44 @@ RefreshWindow = function()
 			entries[#entries + 1] = entry
 		end
 	end
+	-- Crafting profit (Auctionator prices, Profit.lua): read again on every refresh, as prices change; never kept in the cached rows
+	-- beyond the next refresh. The sort button only shows with prices to go by.
+	local profitOn = ns.IsProfitAvailable ~= nil and ns.IsProfitAvailable()
+	if profitOn then
+		ns.ResetProfitCache()
+	end
+	for _, entry in ipairs(found) do
+		entry.profit = nil
+	end
+	for _, entry in ipairs(entries) do
+		entry.profit = profitOn and ns.GetRecipeProfit(entry.recipeID) or nil
+	end
+	local sortProfit = profitOn and lookup ~= nil and lookup.sortProfit == true
+	if sortProfit then
+		entries = ns.SortByProfit(entries, function(entry)
+			return entry.profit
+		end)
+	end
+	-- The sort button of the header: shown only with prices to go by, saying how the list is ordered; the item's name leaves room for it.
+	ui.sortButton:SetShown(profitOn and true or false)
+	ui.sortButton:SetText(sortProfit and "Sort: Profit" or "Sort: Name")
+	ui.itemName:ClearAllPoints()
+	ui.itemName:SetPoint("LEFT", ui.itemIcon, "RIGHT", 8, 0)
+	if profitOn then
+		ui.itemName:SetPoint("RIGHT", ui.sortButton, "LEFT", -8, 0)
+	else
+		ui.itemName:SetPoint("RIGHT", window, "RIGHT", -16, 0)
+	end
+
 	local child = ui.scrollChild
-	child:SetWidth(LIST_WIDTH)
+	child:SetWidth(listWidth)
 	local top = 0
 	local owned = {} -- item counts, asked once per refresh
 	for i, entry in ipairs(entries) do
 		local row = AcquireRow(i)
 		row.entry = entry
+		row.frame:SetWidth(listWidth)
+		row.materials:SetWidth(listWidth - (LIST_WIDTH - MATERIALS_WIDTH))
 		row.frame:ClearAllPoints()
 		row.frame:SetPoint("TOPLEFT", child, "TOPLEFT", 0, -top)
 		row.icon:SetTexture(entry.icon or QUESTION_ICON)
@@ -2895,7 +3043,16 @@ RefreshWindow = function()
 		local color = entry.known and KNOWN_NAME_COLOR or UNKNOWN_NAME_COLOR
 		row.name:SetTextColor(color[1], color[2], color[3])
 		row.qty:SetText("x" .. entry.quantity)
-		ns.PlaceSkillUpText(row.name, row.chance, row.icon, row.qty, ROW_NAME_AREA, ns.FormatSkillUp(entry.skillUp))
+		ns.PlaceSkillUpText(row.name, row.chance, row.icon, row.qty, listWidth - (LIST_WIDTH - ROW_NAME_AREA), ns.FormatSkillUp(entry.skillUp))
+		row.profit:SetText(profitOn and ns.FormatProfit(entry.profit) or "")
+		-- The detail text stops before the profit when there is one, else before the button.
+		row.detail:ClearAllPoints()
+		row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)
+		if profitOn then
+			row.detail:SetPoint("RIGHT", row.profit, "LEFT", -4, 0)
+		else
+			row.detail:SetPoint("RIGHT", row.frame, "RIGHT", -(LINK_BUTTON_WIDTH + 8), 0)
+		end
 		row.detail:SetText(FormatDetail(entry))
 		row.materials:SetText(FormatMaterials(entry.materials, owned))
 		-- The row is as tall as its materials need, so a long list is never cut off or drawn over the next row.
@@ -2976,7 +3133,8 @@ local function BuildWindow()
 	local frame = window
 	-- New frames start shown; hide it so the first Show() fires OnShow.
 	frame:Hide()
-	frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
+	local savedSize = lookup and lookup.size
+	frame:SetSize(savedSize and savedSize[1] or FRAME_WIDTH, savedSize and savedSize[2] or FRAME_HEIGHT)
 	frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 	frame:SetFrameStrata("DIALOG")
 	frame:SetToplevel(true)
@@ -3022,6 +3180,34 @@ local function BuildWindow()
 	ui.itemName:SetHeight(HEADER_ICON_SIZE)
 	ui.itemName:SetJustifyH("LEFT")
 	ui.itemName:SetWordWrap(false)
+
+	-- Orders the list by crafting profit instead of the usual order (shown by RefreshWindow when Auctionator prices are available).
+	ui.sortButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+	ui.sortButton:SetSize(96, 20)
+	ui.sortButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -16, -36)
+	ui.sortButton:SetNormalFontObject("GameFontNormalSmall")
+	ui.sortButton:SetText("Sort: Name")
+	ui.sortButton:Hide()
+	ui.sortButton:SetScript("OnClick", function()
+		if lookup then
+			lookup.sortProfit = not lookup.sortProfit
+		end
+		ui.scroll:SetVerticalScroll(0)
+		RefreshWindow()
+	end)
+	ui.sortButton:SetScript("OnEnter", function(self)
+		if GameTooltip then
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText("Sort order")
+			GameTooltip:AddLine("Name: known recipes first, then by profession and name. Profit: the most profitable crafts first (Auctionator prices), the ones without a price last. Saved for all your characters.", 0.8, 0.8, 0.8, true)
+			GameTooltip:Show()
+		end
+	end)
+	ui.sortButton:SetScript("OnLeave", function()
+		if GameTooltip then
+			GameTooltip:Hide()
+		end
+	end)
 
 	-- Only the recipes of the professions the current character has. A row of its own under the header; the info line, the bar and
 	-- the list start below it.
@@ -3089,6 +3275,87 @@ local function BuildWindow()
 	ui.footer:SetJustifyH("LEFT")
 	ui.footer:SetWordWrap(false)
 
+	-- Resizable from the grip in the bottom right corner, like the chat frame. The default size is the smallest one. A double-click on
+	-- the grip goes back to the default size.
+	local function Bounds()
+		if ns.GetWindowBounds then
+			return ns.GetWindowBounds(FRAME_WIDTH, FRAME_HEIGHT)
+		end
+		return FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH * 2, FRAME_HEIGHT * 2
+	end
+	frame:SetResizable(true)
+	frame:SetResizeBounds(Bounds())
+	ui.grip = CreateFrame("Button", nil, frame)
+	ui.grip:SetSize(16, 16)
+	ui.grip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
+	ui.grip:SetFrameLevel(frame:GetFrameLevel() + 10)
+	ui.grip:EnableMouse(true)
+	ui.grip:RegisterForClicks("LeftButtonUp")
+	ui.grip.texture = ui.grip:CreateTexture(nil, "ARTWORK")
+	ui.grip.texture:SetAllPoints(ui.grip)
+	ui.grip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+	local gripHighlight = ui.grip:CreateTexture(nil, "HIGHLIGHT")
+	gripHighlight:SetAllPoints(ui.grip)
+	gripHighlight:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+	-- Lets go of the grip: the size is kept inside the bounds and saved (nothing is saved for the default size).
+	local function StopSizing()
+		ui.grip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+		frame:StopMovingOrSizing()
+		local minWidth, minHeight, maxWidth, maxHeight = Bounds()
+		local width = math.max(minWidth, math.min(maxWidth, math.floor(frame:GetWidth() + 0.5)))
+		local height = math.max(minHeight, math.min(maxHeight, math.floor(frame:GetHeight() + 0.5)))
+		if width ~= frame:GetWidth() or height ~= frame:GetHeight() then
+			frame:SetSize(width, height)
+		end
+		if lookup then
+			lookup.size = (width ~= FRAME_WIDTH or height ~= FRAME_HEIGHT) and { width, height } or nil
+		end
+	end
+	ui.grip:SetScript("OnMouseDown", function(_, mouseButton)
+		if mouseButton == "LeftButton" then
+			ui.grip.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+			frame:SetResizeBounds(Bounds())
+			frame:StartSizing("BOTTOMRIGHT")
+		end
+	end)
+	ui.grip:SetScript("OnMouseUp", StopSizing)
+	ui.grip:SetScript("OnDoubleClick", function()
+		frame:StopMovingOrSizing()
+		frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
+		StopSizing()
+	end)
+	ui.grip:SetScript("OnEnter", function(self)
+		if GameTooltip then
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText("Resize")
+			GameTooltip:AddLine("Drag to resize the window. Double-click to go back to the default size.", 0.8, 0.8, 0.8, true)
+			GameTooltip:Show()
+		end
+	end)
+	ui.grip:SetScript("OnLeave", function()
+		if GameTooltip then
+			GameTooltip:Hide()
+		end
+	end)
+	-- A new width is laid out again (the rows are cached, so this is cheap); a new height only shows more rows.
+	frame:SetScript("OnSizeChanged", function(_, newWidth)
+		if ui.laidOutWidth == newWidth or ui.relayoutPending then
+			return
+		end
+		local function Relayout()
+			ui.relayoutPending = false
+			if frame:IsShown() then
+				RefreshWindow()
+			end
+		end
+		if C_Timer and C_Timer.After then
+			ui.relayoutPending = true
+			C_Timer.After(0, Relayout)
+		else
+			Relayout()
+		end
+	end)
+
 	frame:SetScript("OnShow", RefreshWindow)
 	frame:SetScript("OnHide", function()
 		if GameTooltip then
@@ -3121,6 +3388,13 @@ end
 -- Window and widget table, for tests.
 function ns.GetRecipesWindow()
 	return window, ui
+end
+
+-- The crafting profit was switched on or off (Profit.lua): an open window follows.
+function ns.RefreshRecipesWindow()
+	if window and window:IsShown() then
+		RefreshWindow()
+	end
 end
 
 --------------------------------------------------------------------------------

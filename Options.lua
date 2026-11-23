@@ -4,7 +4,7 @@ local addonName, ns = ...
 -- the checkbox that switches the feature on or off. "Stat Weights" holds the profile
 -- controls, the display settings and the list of stats that have a weight; "Range Check"
 -- holds the settings of the range indicator; "Recipes" explains the recipe lookup, shows
--- its key binding and what is saved, and can forget the saved recipes; "Mail" switches the
+-- its key binding and what is saved, switches the crafting profit (Auctionator prices) on and off and can forget the saved recipes; "Mail" switches the
 -- mail features (the recent mail recipients list and the "materials in your mail" window) on, clears the list and mentions the
 -- "materials in your mail" command. The Recipes and Mail tabs also list the professions of the saved recipes with a check
 -- box each, to hide a profession from the recipes window or the materials window. A strip under the pages holds the check box of the minimap button. It is built lazily
@@ -1117,7 +1117,7 @@ local function BuildProfessionSection(parent, x, y, width, getHidden, setHidden,
 end
 
 local RECIPES_SCROLL_NAME = "JimmysUtilsRecipesPageScroll"
-local RECIPES_SCROLL_TOP = 58 -- below the enable check box
+local RECIPES_SCROLL_TOP = 128 -- below the enable check box, the crafting profit check boxes and the note
 local RECIPES_SCROLL_BOTTOM = 44 -- above the forget button and the status line
 local RECIPES_TEXT_WIDTH = 298 -- the scroll frame is 310 wide (page minus margins and the scroll bar)
 local RECIPES_PROFESSIONS_TOP = 102 -- where the professions section starts inside the scrolling content: right under the saved recipes
@@ -1145,6 +1145,29 @@ local function RefreshRecipesPage()
 
 	ui.recipesEnable:SetChecked(ns.IsRecipeLookupEnabled() and true or false)
 	ui.recipesBinding:SetText(GetBindingDescription())
+
+	-- Crafting profit needs Auctionator's prices: without it the check box shows unchecked and greyed out and says why (the saved choice
+	-- is kept, and shows again when Auctionator is there).
+	local priced = ns.IsAuctionatorLoaded ~= nil and ns.IsAuctionatorLoaded()
+	ui.profitEnable:SetChecked(priced and ns.IsProfitEnabled ~= nil and ns.IsProfitEnabled() and true or false)
+	ui.profitEnable:SetEnabled(priced and true or false)
+	if priced then
+		ui.profitEnable.Text:SetTextColor(1, 1, 1)
+	else
+		ui.profitEnable.Text:SetTextColor(0.5, 0.5, 0.5)
+	end
+	ui.profitNote:SetShown(not priced)
+	-- The sort of the profession window's list: the Filter menu does it too, but not under the gamepad interface. Not while SkillUp
+	-- Forever sorts the list, and not without prices.
+	local blocked = ns.IsProfitListSortBlocked ~= nil and ns.IsProfitListSortBlocked()
+	local listSortable = priced and not blocked
+	ui.listSortEnable:SetChecked(listSortable and ns.IsProfitListSorted ~= nil and ns.IsProfitListSorted() and true or false)
+	ui.listSortEnable:SetEnabled(listSortable and true or false)
+	if listSortable then
+		ui.listSortEnable.Text:SetTextColor(1, 1, 1)
+	else
+		ui.listSortEnable.Text:SetTextColor(0.5, 0.5, 0.5)
+	end
 
 	local total, professions = ns.GetRecipeSummary()
 	if total == 0 then
@@ -1202,6 +1225,22 @@ local function BuildRecipesPage(page)
 		DisarmConfirms()
 		ns.SetRecipeLookupEnabled(checked)
 	end, "Saves recipes and answers the lookup (key binding and /ju recipes). Off stops both and closes the recipes window; the saved recipes are kept. The same as /ju recipes on and off.")
+
+	-- What a recipe earns when crafted and sold at the auction house (Profit.lua); the prices come from Auctionator.
+	ui.profitEnable = CreateToggle(page, "Show crafting profit (needs Auctionator)", 12, -58, function(checked)
+		if ns.SetProfitEnabled then
+			ns.SetProfitEnabled(checked)
+		end
+	end, "Shows what a recipe earns when crafted and sold at the auction house, from Auctionator's prices: in the recipes window and the materials window (with a button to sort by profit) and as a sort in the profession window's Filter menu. Needs the Auctionator addon.")
+	ui.listSortEnable = CreateToggle(page, "Sort the profession window's recipe list by profit", 12, -84, function(checked)
+		if ns.SetProfitListSort then
+			ns.SetProfitListSort(checked)
+		end
+	end, "Sorts the recipe list of the profession window by crafting profit (learned recipes first, then the unlearned ones as the game lists them). The same as Sort by in its Filter menu, which is not offered under the gamepad interface. SkillUp Forever sorts this list itself while it is loaded.")
+	ui.profitNote = page:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+	ui.profitNote:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -110)
+	ui.profitNote:SetText("Auctionator is not loaded, so there are no prices.")
+	ui.profitNote:Hide()
 
 	-- Everything under the check box scrolls: the page has no room left for the professions section after the texts. The
 	-- scroll frame is named so the template's "$parentScrollBar" children get a unique, namespaced global name.
@@ -1309,7 +1348,7 @@ local function BuildMailPage(page)
 	ui.mailEnable = CreateToggle(page, "Enable mail features (recent recipients and mail materials)", 12, -32, function(checked)
 		SetMailStatus(nil)
 		ns.SetMailEnabled(checked)
-	end, "Switches both mail features: the panel with the last 10 characters you sent mail to, next to the Send Mail tab of the mailbox, and the scan of your mailbox for recipe materials (/ju materials). Off records and scans nothing, hides the panel and the Take all and Materials buttons of the mailbox, and closes the materials window.")
+	end, "Switches both mail features: the panel with the last 10 characters you sent mail to, next to the Send Mail tab of the mailbox, and the scan of your mailbox for recipe materials (/ju materials). Off records and scans nothing, hides the panel and the Materials button of the mailbox, and closes the materials window.")
 
 	ui.mailCount = page:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	ui.mailCount:SetPoint("TOPLEFT", page, "TOPLEFT", 18, -70)
