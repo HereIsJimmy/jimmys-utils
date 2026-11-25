@@ -144,6 +144,9 @@ function ns.SetMinimapButtonShown(shown)
 			UpdatePosition()
 		end
 	end
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	return true
 end
 

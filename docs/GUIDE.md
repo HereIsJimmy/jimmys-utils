@@ -21,6 +21,14 @@ materials, see [Minimap button](#minimap-button)):
   still lack, so you can see which of your other characters could craft something with the mail.
 - **Crafting profit** - with Auctionator installed, what a recipe earns when crafted and sold at the auction house, shown in the recipes
   window, the materials window and the profession window's own recipe list (through its Filter menu), see [Crafting profit](#crafting-profit).
+- **Auction house scores** - the stat weight score of every scale you list in the tooltips as a column of the auction house's Browse tab, and a click
+  on its header sorts the loaded results by it, see [Auction house scores](#auction-house-scores).
+- **Resizable auction house** - a grip in the bottom right corner of the auction house window makes the whole window larger, see
+  [Resizable auction house](#resizable-auction-house).
+- **Profession window that stays put** - an option (off by default) that takes Blizzard's profession window out of the game's panel layout so
+  opening other windows never closes or moves it, and lets you drag it by its title bar, see [Profession window](#profession-window).
+- **Settings profiles** - named sets of the settings of the whole addon, one in use per character, switched in one click and shared as text,
+  see [Profiles tab](#profiles-tab-settings-profiles).
 
 Each of the four features (stat weight scores, range check, recipe lookup, mail) can be switched on and off on its own, see
 [Feature toggles](#feature-toggles).
@@ -37,8 +45,14 @@ Copy the `JimmysUtils` folder into the Forever client's `World of Warcraft\_fore
 ## Usage
 
 Open the options window with `/ju` (it toggles, and also works during combat), or with the **Open Jimmy's Utils** button
-under **Game Menu > Options > AddOns > Jimmy's Utils**. It is a small movable window with four tabs, **Stat Weights**,
-**Range Check**, **Recipes** and **Mail** (the last tab used is remembered); close it with its close button or Escape.
+under **Game Menu > Options > AddOns > Jimmy's Utils**. It is a small movable window (400 x 510 pixels by default) with five tabs, **Stat Weights**,
+**Range Check**, **Recipes**, **Mail** and **Profiles**, which is always the last one (the last tab used is remembered); close it with its close button or Escape.
+
+**Resizing.** A grip in the bottom right corner of the window (like the chat frame's) resizes it: drag it to make the window wider or
+taller, double-click it to go back to the default size. The default size is the smallest one and the largest is twice that or what the screen
+holds. The lists use the room: the **Weights** list of the Stat Weights tab and the scrolling area of the Recipes tab grow with the window, and
+so do the dropdowns and the text boxes between the buttons; the check boxes and the buttons keep their places (the ones at the right or the
+bottom edge stay at that edge). The size is saved for all your characters and is used the next time the window opens.
 
 ### Feature toggles
 
@@ -47,7 +61,7 @@ The first widget of every tab is the check box that switches that feature on or 
 
 | Tab | Check box | Command | When it is off |
 | --- | --- | --- | --- |
-| Stat Weights | Enable stat weights | `/ju stats on` / `off` | No score lines (and no breakdown) are added to item tooltips. Profiles and weights can still be edited, and `/ju dump` still works |
+| Stat Weights | Enable stat weights | `/ju stats on` / `off` | No score lines (and no breakdown) are added to item tooltips. Scales and weights can still be edited, and `/ju dump` still works |
 | Range Check | Enable range check | `/ju range` (toggles) | The indicator is hidden and not updated |
 | Recipes | Enable recipe lookup | `/ju recipes on` / `off` | Recipes are not saved, the key binding and `/ju recipes <item>` only say "Recipe lookup is off. Turn it on with /ju recipes on." and the recipes window (and the Wowhead link popup) closes. The saved recipes are kept (`/ju recipes status` and `forget` still work, and the mail materials keep using them) |
 | Mail | Enable mail features (recent recipients and mail materials) | `/ju mail on` / `off` | The recent recipients panel is hidden and no recipients are recorded, the inbox is not scanned for materials, `/ju materials` says "Mail features are off. Turn them on with /ju mail on." and the materials window closes. The saved list and the last scan are kept |
@@ -88,8 +102,21 @@ The command works on the zone you are standing in, not on the map window you hav
 There you can:
 
 - switch the score lines on item tooltips on or off (the first check box; see [Feature toggles](#feature-toggles)),
-- create, copy, switch and delete profiles (Delete asks for a second click; each character remembers its own active profile;
-  profiles themselves are shared account-wide),
+- create, copy, rename, switch and delete scales (a scale is a named set of weights; Delete asks for a second click; each character remembers its own active scale;
+  the scales themselves are shared account-wide, and so is what each character chose, see [Saved data](#saved-data)). **New**, **Copy** and **Rename** use the name typed in the box next to them; **Rename** gives the
+  active scale that name (the weights, every character's **Show in tooltip** choice and active scale, and the scale the auction house is sorted by go with it). A name is checked like
+  a new one (1-32 characters, not used by another scale in any case; only a change of case of the scale's own name is fine). Your other characters
+  keep their choices: a scale that was their active or hidden scale still is under its new name, the moment you rename it,
+- choose which scales the tooltip lists: the **Show in tooltip** check box (under the scale dropdown) shows or hides the
+  active scale. A hidden scale keeps its weights and can still be edited here; the dropdown marks it "(hidden)". Each
+  character remembers its own choice (it is kept with the scale, per character, so it follows a rename), and every scale is shown by default to every
+  character, including the ones that log in later,
+- import a scale from a Pawn scale tag (**Import**) or copy the active scale as one (**Export**), both next to **Show in tooltip**, see
+  [Importing Pawn scales](#importing-pawn-scales),
+- show the scores in the auction house too: the **Show stat weight scores in the auction house** check box (under **Show in tooltip**), see
+  [Auction house scores](#auction-house-scores),
+- make the auction house window resizable: the **Resizable auction house window (drag its bottom-right corner)** check box (under the one above), see
+  [Resizable auction house](#resizable-auction-house),
 - choose how many decimals the score shows, whether a score of 0 is hidden, whether "Equip:" text is read, and when the per-stat
   breakdown is displayed,
 - edit the weights. The **Weights** list shows only the stats that currently have a weight; type a new number in a weight box
@@ -102,7 +129,70 @@ By default primary stats (Strength, Agility, Stamina, Intellect, Spirit) have a 
 Blizzard's **Defaults > All Settings** only resets this addon's display options, never your weights; use **Reset weights** (it asks for a second click)
 (or `/ju reset`) for that.
 
-The profile name is shown in the tooltip line only when you have more than one profile.
+The tooltip has one **Stat Weight** line for every scale that is shown (in alphabetical order), each scored with that
+scale's own weights; the breakdown, when it is displayed, follows each line. The scale name is added to the line, as in
+"Stat Weight (Tank)", only when you have more than one scale. Decimals and **Hide score when 0** apply to each line on its
+own, so a scale whose score is 0 can disappear while the others stay. If every scale is hidden, no line is added.
+
+### Importing Pawn scales
+
+Pawn (VgerMods) shares a stat scale as a tag, one line of text:
+
+```
+( Pawn: v1: "Name": Strength=1.5, Stamina=0.25, HitRating=2 )
+```
+
+The **Import** and **Export** buttons on the **Stat Weights** tab (right of **Show in tooltip**) open a small box over the options window.
+
+- **Import:** paste the tag into the box (Ctrl+V) and click **Import**. A scale with the tag's name is created and made the active one; it has exactly the weights of the
+  tag (the default weights are not added) and is listed in the tooltips like any new scale. A name longer than 32 characters is cut. If a scale of that name already exists
+  (in any capitals) the button turns into **Confirm?** and the box says so; a second click replaces the weights of that scale the tag can express with the tag's (nothing else: it stays hidden if it was hidden, and the weights Pawn has no name for, the "(Equip)" effects and detected stats, are kept; the chat says how many). Typing
+  in the box, **Cancel** or waiting a few seconds takes the confirmation back. The chat tells what was done: `Imported 5 stats into scale "Name"; skipped: FeralAp, Speed.`
+  A text that is not a tag, a tag of a version other than 1 or a tag without a single usable stat is refused with a message in the box and nothing changes.
+- **Export:** the box shows the active scale as a tag, selected: press Ctrl+C and paste it into Pawn, a post or a file. Editing the text in the box is undone. Only
+  non-zero weights are written, in the order of the stat list, with the numbers as you typed them (no exponents, which Pawn could not read). Stats Pawn has no name for are left out and listed under the tag.
+- **Chat:** `/ju scale import <tag>` imports a tag typed or pasted in the chat box; `/ju scale import replace <tag>` replaces the weights of a scale of the same name; `/ju scale export` prints the
+  tag of the active scale (`/ju scale export <name>` the one of another scale). The chat box takes at most 255 characters, which long scales exceed: use the buttons for those.
+
+How a tag is read (the same as Pawn's own reader):
+
+- The pattern is `( Pawn: v<version>: "<name>": <Stat>=<value>, <Stat>=<value>, ... )`, spaces anywhere between the parts are fine and a tag pasted over several lines works. Only version 1 exists.
+- `Class=` and `Spec=` say which character the scale was made for, they are not stats and are not imported (but see the next paragraph). A value of `X` (or `x`) means "ignore this stat" in Pawn and is skipped. A weight of 0 is not stored. Names are not case sensitive.
+- A stat that appears twice takes its last value. A value that is not a number (`Strength=abc`, `1.2.3`) skips that stat and is reported.
+- Names this addon has no stat for are skipped and reported (once each).
+
+**Tags with `Class=`.** Pawn's `PawnGetScaleTag` leaves out every value that equals the one in Pawn's template for that class (and spec), and Pawn's own import puts the template back. Those templates are Pawn's data and are not part of this
+addon, so a tag with `Class=` imports only the weights it lists; the import still works but warns, in the chat and in the status line of the options window, that *Pawn class scales only list the weights you changed from Pawn's class template; the
+other stats are missing* (`info.classTemplate`). When no usable weight is left in such a tag the error says so too, instead of the generic "no stat weights". To bring a complete scale over, in Pawn create the scale as an empty (custom) scale
+with no class, or use a tag generated by a website, which lists every stat, and export that.
+
+The Pawn names that are imported, and the stats they become:
+
+| Pawn name | Stat |
+| --- | --- |
+| `Strength`, `Agility`, `Stamina`, `Intellect`, `Spirit` | the primary stats |
+| `Armor` | Armor |
+| `HitRating`, `CritRating`, `HasteRating`, `ExpertiseRating`, `ArmorPenetration` | Hit, Critical Strike, Haste, Expertise, Armor Penetration |
+| `SpellPenetration` | Spell Penetration |
+| `Ap`, `Rap` | Attack Power, Ranged Attack Power |
+| `SpellDamage`, `Healing` (and `SpellPower`) | Spell Power, Bonus Healing and Spell Damage (see *Spell power* below) |
+| `DefenseRating`, `DodgeRating`, `ParryRating`, `BlockRating`, `BlockValue` | Defense, Dodge, Parry, Block, Block Value |
+| `Mp5`, `Hp5` | Mana per 5 sec., Health per 5 sec. |
+| `FireResist`, `NatureResist`, `FrostResist`, `ShadowResist`, `ArcaneResist` | the resistances |
+| `Dps` | Damage per Second |
+
+Everything else is skipped: `FeralAp`, the spell damage and healing of single schools (`FireSpellDamage`, `ArcaneSpellDamage`...), `Speed`, the weapon values (`MeleeDps`, `MainHandDps`, `OffHandDps`,
+`RangedDps`, `MinDamage`, `MaxDamage`, `MainHandSpeed`...), the `Is...` flags and any other name not in the table. The stats of the scale that Pawn has no name for are left out of the tag: the "(Equip)" effects read from tooltip text, such as
+**Hit chance % (Equip)**, plus stats detected on items.
+
+**Spell power.** Pawn counts "+X damage and healing" as `SpellDamage` = X plus `Healing` = X, a healing-only line as `Healing` and a damage-only line as `SpellDamage` (its tooltip pattern `SpellDamageNoHealing` is not a stat of a tag). Here
+**Spell Power** (`ITEM_MOD_SPELL_POWER_SHORT`) is the combined line, **Bonus Healing** (`ITEM_MOD_SPELL_HEALING_DONE_SHORT`) the healing-only line and **Spell Damage** (`ITEM_MOD_SPELL_DAMAGE_DONE_SHORT`) the damage-only line. So:
+
+- Import: Spell Power = `SpellDamage` + `Healing` (+ `SpellPower`, the name Wrath's Pawn uses), Bonus Healing = `Healing`, Spell Damage = `SpellDamage`.
+- Export: `Healing` = the Bonus Healing weight; `SpellDamage` = the Spell Damage weight when it is not 0, else Spell Power minus Bonus Healing (when that is not 0).
+- That round-trips exactly for scales where Spell Power = Spell Damage + Bonus Healing (what an import makes: a caster `SpellDamage=1` gives Spell Power 1 and Spell Damage 1; a healer `Healing=0.8` gives Spell Power 0.8 and Bonus Healing 0.8).
+  For other scales the export is an approximation (a scale that weighs the combined line differently from its two parts cannot be written as a Pawn tag), and a scale with only a Bonus Healing weight exports a negative
+  `SpellDamage`, which is what Pawn's scoring of the combined line would need to give 0 there.
 
 ### Range Check tab
 
@@ -397,6 +487,75 @@ their base item ID, so gear with a random suffix gets the price of its base item
   the list is the client's, the windows sort by name without their sort buttons, and the option shows unchecked and greyed out with a note. Nothing you chose is
   overwritten (the option, the list sort and the windows' sorts stay saved), so it all comes back as it was once Auctionator is there.
 
+### Auction house scores
+
+*Stat Weights* tab: **Show stat weight scores in the auction house**, on by default (saved as `auctionScores.enabled`). The Browse tab of Blizzard's auction house
+(`AuctionHouseFrame.BrowseResultsFrame`, from the load-on-demand `Blizzard_AuctionHouseUI`) gets one narrow column per scale listed in the tooltips, in the
+tooltips' order and at most three (the Name column keeps its room; with more listed scales the others have no column, so hide the ones you do not need with
+**Show in tooltip**). A column is only as wide as a score with four digits before the point needs at the **Decimals** setting, and its header is its scale's
+name cut to what fits that width (at most seven characters; hovering it shows the whole name). The columns are left out while none of the loaded results is
+equipment (a search for reagents or potions, say; the sort choice is kept and works again with the next search that has gear), and they show up only while
+**Enable stat weights** is on as well, and the check box turns them (and the sort) off without touching anything else.
+
+Each row of the Browse list is an item key (item ID, item level, random suffix), and is scored from the tooltip data of that exact key
+(`C_TooltipInfo.GetItemKey`) with the same code as the tooltips (`ns.CollectItemStats`, `ns.ComputeScore`), so the number is the one the tooltip of that item shows, with
+the same decimals and **Hide score when 0**. Two keys of one item ID with different random suffixes are scored apart. Items that are not equippable (told from the item class data of `C_Item.GetItemInfoInstant`), battle pets, and items
+the client has not loaded yet have an empty cell; the item data is requested and the list refreshes by itself when it arrives. "Not scorable" is only remembered for an item whose data is loaded (an item that is not loaded, or whose
+tooltip data looks unfinished, stays pending, with at most three requests), so a slow client never leaves a row blank for good. The item link the stats are read from is found like Blizzard's own auction tooltip finds it:
+`C_AuctionHouse.GetItemKeySampleLink` of the item key, else the hyperlink of its tooltip data; no link is built by hand, and a row without one waits. The stats are cached per item key for the session
+(changing **Read Equip: text** starts the cache over).
+
+**Sorting:** click the header of a score column to sort the browse results by that scale's score, highest first (an arrow marks the active header); rows without a score come
+after the scored ones, and rows with equal scores stay in the auction house's order. Click the same header again, or any of the auction house's own sort headers, to go back to the
+auction house's order. The choice is saved (`auctionScores.sortProfile`, account-wide) and applies to every search until you turn it off; it is forgotten only when its scale is deleted (the
+choice is account-wide, while hiding a scale is per character), and it does nothing while its scale has no column (hidden for this character, or not among the first three) or the columns are off (the choice is kept). The auction house sends its results page
+by page and sorts them itself, so only the rows loaded so far are sorted: a page that arrives while you scroll is sorted into the list (rows can move), and the auction house's own
+sort arrows keep showing its own order.
+
+How it is done: Blizzard's layout function of the list is wrapped (it runs first, then the score columns are appended after its columns; the wrapper is handed over with the item list's
+own `SetTableBuilderLayout`, and again whenever the browse frame sets up a new layout, for example when the category changes). The headers are Blizzard's own header template, the cells are plain
+frames from a small pool of this addon's, and the sort reorders the array `browseResults` of the browse frame (the rows are the same tables, only their positions change, so the row you click is the
+item the auction house opens) after Blizzard has updated it (`hooksecurefunc` on `UpdateBrowseResults`; `SetSortOrder` is hooked to turn the sort off). No function of Blizzard's is replaced, the
+array is not touched while no sort is on, and nothing is ever sent to the auction house. Only Blizzard's Browse tab is touched; Auctionator's own tabs are left alone. Scans are ignored: a browse query for the whole auction house (no text,
+no category, no filter, which is what Auctionator's autoscan sends) turns the columns off for its results, even on the Browse tab, and the next real search
+or the favorites list brings them back (with the saved sort). Blizzard's Browse list also receives every page of results while another tab is open: nothing
+is scored, sorted or asked of the client for those until the Browse tab is shown again. If adding the columns ever fails, the
+columns stay off until `/reload` with one chat message.
+
+### Resizable auction house
+
+*Stat Weights* tab: **Resizable auction house window (drag its bottom-right corner)**, on by default (saved as `auctionHouseSize.enabled`). A grip (the same one as the
+chat frame's) sits in the bottom right corner of Blizzard's auction house window (`AuctionHouseFrame`, from the load-on-demand `Blizzard_AuctionHouseUI`): hold the left button
+and drag to make the whole window larger, right-click it to go back to the default size. Hover it for a reminder. The window is never smaller than Blizzard's size (800 x 538),
+and never larger than the screen minus a small margin, nor beyond the right and bottom edges of the screen from where its top left corner is, so the grip cannot be dragged out of reach.
+The size is saved (`auctionHouseSize.width` and `height`, account-wide) and applied each time the window opens.
+
+How it works: the window is sized by hand from the cursor position (not with the client's own sizing, which could re-anchor a window the game's panel manager positions). That
+manager anchors the auction house by its top left corner, so it grows to the right and downwards. Nearly everything inside the window is anchored to its edges and stretches by
+itself (the Browse results, the buy and sell pages, the Auctions tab, Auctionator's tabs). Two things are helped: the categories list on the left has a fixed height, so it gets
+the height the window gained, and the item lists only work out their column widths when their layout is marked dirty, so every item list under the window is handed its current
+layout function again (the score columns of the previous section are part of it and stay), at most every 0.1 s while dragging and once more when the button is let go.
+
+Turning the option off hides the grip and gives the window (and its categories list) the default size at once; the saved size is kept, so turning it on again brings it back. Settings
+profiles carry the option, not the size.
+
+### Profession window
+
+*Recipes* tab: **Keep the profession window open (movable)**, off by default (saved as `professionWindow.detached`). Blizzard shows its profession window
+(`ProfessionsFrame`, from the load-on-demand `Blizzard_Professions`) through its UI panel manager, which closes or pushes it aside when you open the character
+panel, the spellbook, a merchant, the friends list... With the option on, the window is taken out of that manager: its entry in `UIPanelWindows` is
+removed, and the frame's `UIPanelLayout-defined` and `UIPanelLayout-area` attributes are cleared, so the game just shows and hides it like any
+other frame (Escape still closes it). The window becomes movable and clamped to the screen: drag it with the left mouse button by its title bar. The position
+is saved (`professionWindow.position`, relative to the screen) and used every time the window opens; before you move it, it opens where Blizzard puts it.
+Because the option changes how the game manages that window, turning it off needs a `/reload` (see below).
+
+**Taint trade-off.** `UIPanelWindows` and the `UIPanelLayout-*` attributes belong to Blizzard's panel manager; writing them from an addon taints that data for the rest of the session, and addon code cannot undo it (putting the entry back would be one more
+write from tainted code). So the addon only ever detaches the window and never re-attaches it: turning the option off keeps the window detached (still movable, still at its position) until you `/reload`, the options window says so and the chat
+prints *Takes effect after /reload: the profession window goes back to Blizzard's layout.*, and the next load simply does not detach it, which restores Blizzard's behaviour. With the option off from the start nothing of Blizzard's is written at all.
+
+Turning the option on is only applied while the window is closed and you are out of combat: if you change the option while the window is open it applies as soon as the window
+closes, and in combat when combat ends. Only `HookScript` is used on Blizzard's frame.
+
 ### Mail tab and recent mail recipients
 
 Whenever a letter is sent successfully, its recipient goes to the top of a list of the last 10 recipients of the realm you are on
@@ -424,6 +583,63 @@ you switch them with `/ju mail on` / `off` or the check box).
   **Inbox** and the **Send Mail** tab, opens or closes the **Materials in your mail** window exactly like `/ju materials`, and has the tooltip
   "Materials in your mail" (recipes your characters know that use items in your mail). The window still never opens by itself.
 
+### Profiles tab (settings profiles)
+
+A **profile** is a named snapshot of the settings of the whole addon. Each character uses one profile (the first time, and for every character that
+has not chosen one, it is **Default**, made from the settings you had when the feature first ran). Picking another profile in the dropdown applies all
+its settings at once, through the same code as the check boxes and commands, so everything follows: the minimap button appears or goes, the range
+indicator changes, the recipe lookup and the mail features turn on or off, the auction house columns come and go, and the open windows refresh.
+Turning off **Keep the profession window open (movable)** this way still needs a `/reload`, and says so like the check box does.
+
+Changes you make afterwards (any check box, dropdown or command that sets one of these settings) are written straight into the profile the
+character uses, so the profile always holds what you see. Other characters on the account keep using their own profile: they apply it when they
+log in. A profile is not locked: it is simply what the characters that use it have set last, so characters sharing a profile share its changes.
+
+**What a profile holds** (saved with the same names as in the saved variables):
+
+| Section | Settings |
+| --- | --- |
+| `settings` | `decimals`, `hideZero`, `breakdown`, `parseEquipText` (how the stat weight scores are shown) |
+| `stats` | `enabled` (scores on item tooltips) |
+| `range` | `enabled`, `locked`, `size`, `anchor` (range check) |
+| `recipeLookup` | `enabled`, `onlyMyProfessions`, `sortProfit`, `hiddenProfessions` (recipe lookup and the recipes window) |
+| `mail` | `enabled` (recent recipients and mail materials) |
+| `mailMaterials` | `showOthers`, `sortProfit`, `hiddenProfessions` (the materials window) |
+| `profit` | `enabled`, `listSort` (crafting profit and the sort of the profession window's list) |
+| `auctionScores` | `enabled` (score columns of the auction house) |
+| `auctionHouseSize` | `enabled` (the resizable auction house window; not its size) |
+| `professionWindow` | `detached` (keep the profession window open) |
+| `minimap` | `hide` (the minimap button) |
+
+**What a profile never holds:** the stat weight scales (their weights, which scale is active, which are hidden, the scale the auction house is sorted by:
+they are shared by all characters and have their own Pawn import and export), saved data (recipes, who knows them, skills, item names, bags, bank and mail
+snapshots, recent mail recipients), the positions and sizes of the windows (the options, recipes, materials and auction house windows, the range indicator's screen position, the
+profession window's position), the minimap button's angle, the range check spell (it depends on the class, so it stays with the character), the options window's last tab, and
+the old-version migration data.
+
+**Buttons.** The dropdown at the top switches the profile of this character. **New** saves the settings as they are now under the name typed in the box and switches to that
+profile; **Copy** saves a copy of the profile in use under that name and switches to it (the two give the same settings, the profile in use is always what you have now);
+**Rename** gives the profile in use the typed name (the characters that use it follow); **Delete** (click twice) deletes the profile in use, and the characters that used it use Default
+(or, without a Default, the first profile by name) from then on, this one at once; the last profile cannot be deleted. A name is checked like a scale name: 1-32 characters, and not used by
+another profile in any case. **Export** shows the profile in use as a text string and **Import** creates a profile from one.
+
+**Export and import.** The string looks like `JU1:3f2a91c4:eyJ...`: a version (`JU1`), a checksum and the profile as text (the name and the settings above, nothing else). Copy it with
+Ctrl+C from the box and paste it into the box of **Import** (line breaks and spaces are ignored). The profile gets the name in the string, or the one you type in the optional **Name** box; if a
+profile of that name exists the button asks for a second click and then replaces it (the profile in use is applied again at once). Importing never switches profile: the new one is in the list,
+pick it to use it. The import never runs anything from the string: it is read by a small parser that only knows strings, numbers, true/false and tables (at most 6 levels deep,
+2000 values, 200 characters per text, 16 KB in all), every value is checked like the saved settings are at load (a value that is not usable becomes the default and is reported), and keys the
+addon does not know (a string from a newer version, say) are ignored and listed in the chat message. A string with a damaged checksum, from another format version, or that is not a profile is refused with a message and
+nothing is created. Strings are the same between accounts and characters.
+
+**While the realm is not known** (very early in the login) no profile is touched and nothing is written under a character key; a profile you switch to on purpose is used and becomes the
+character's as soon as the key is known, and otherwise the character's profile is applied at `PLAYER_LOGIN` (or at load, when the realm is already known) if it differs from the live settings. A last snapshot is taken at `PLAYER_LOGOUT`.
+
+**Commands.** `/ju profile` lists the profiles (the one in use is marked); `/ju profile <name>` or `/ju profile switch <name>` switches (an existing profile name always wins over the sub-commands);
+`/ju profile new <name>`, `copy <name>`, `rename <new name>`, `delete <name>`; `/ju profile export [<name>]` prints a string; `/ju profile import <string>` (or `import replace <string>` to overwrite
+a profile of the same name; the chat takes at most 255 characters, so use the **Import** button for long strings). **Changed:** `/ju profile` used to be an unlisted alias of `/ju scale`; it now means
+these profiles, and the scales are only managed with `/ju scale`. In the options window and in chat the word "profile" means these settings profiles and "scale" the stat weight scales (the code still calls the scales
+profiles, `db.profiles`).
+
 ## Slash commands
 
 `/ju` or `/jimmysutils` (`/jsw` and `/statweights` still work as aliases):
@@ -435,14 +651,27 @@ you switch them with `/ju mail on` / `off` or the check box).
 | `/ju status` | Show whether each feature (stat weight scores, range check, recipe lookup, mail) is on or off |
 | `/ju stats` | Show whether the stat weight scores on item tooltips are on |
 | `/ju stats on` / `/ju stats off` | Turn the stat weight scores on item tooltips on or off |
-| `/ju list` | Show the non-zero weights of the active profile |
+| `/ju list` | Show the non-zero weights of the active scale |
 | `/ju set <stat> <number>` | Set a weight. `<stat>` is a stat key, a label, or a unique label prefix (case-insensitive); `,` is accepted as decimal separator. Example: `/ju set crit 1.5` |
-| `/ju profile` | Show the active profile and all profiles |
-| `/ju profile <name>` | Switch to a profile (an existing profile name always wins, so a profile called "New Tank" can be selected) |
-| `/ju profile new <name>` | Create a profile with the default weights and switch to it |
-| `/ju profile copy <name>` | Copy the active profile and switch to the copy |
-| `/ju profile delete <name>` | Delete a profile (the last one cannot be deleted) |
-| `/ju reset` | Reset the active profile's weights to the defaults |
+| `/ju scale` | Show the active scale and all scales |
+| `/ju scale <name>` | Switch to a scale (an existing scale name always wins, so a scale called "New Tank" can be selected) |
+| `/ju scale new <name>` | Create a scale with the default weights and switch to it |
+| `/ju scale copy <name>` | Copy the active scale and switch to the copy |
+| `/ju scale rename <new name>` | Rename the active scale. The name is checked like a new scale's; your other characters keep their choices for it (active and hidden scale) under the new name. Like the other sub-commands, an existing scale name wins, so a scale called "Rename Tank" is switched to |
+| `/ju scale delete <name>` | Delete a scale (the last one cannot be deleted) |
+| `/ju scale show <name>` | List a scale in item tooltips (every scale is listed by default) |
+| `/ju scale hide <name>` | Leave a scale out of item tooltips; its weights are kept. Like the other sub-commands, an existing scale name wins, so a scale called "Hide Tank" is switched to |
+| `/ju scale import <tag>` | Create a scale from a [Pawn scale tag](#importing-pawn-scales) and switch to it. A scale of the same name is not touched: `/ju scale import replace <tag>` replaces its weights. The chat box takes at most 255 characters, so use the **Import** button for long tags |
+| `/ju scale export [<name>]` | Print the active scale (or the named one) as a Pawn scale tag; the **Export** button of the options window gives one you can copy |
+| `/ju reset` | Reset the active scale's weights to the defaults |
+| `/ju profile` | Show the settings profiles (the whole addon's settings, see [Profiles tab](#profiles-tab-settings-profiles)) and which one this character uses. Not the scales: that is `/ju scale` (`/ju profile` used to be an unlisted alias of it) |
+| `/ju profile <name>` | Switch this character to a profile and apply its settings (an existing name always wins over the sub-commands below); `/ju profile switch <name>` is the same |
+| `/ju profile new <name>` | Save the current settings as a new profile and switch to it |
+| `/ju profile copy <name>` | Copy the profile in use and switch to the copy |
+| `/ju profile rename <new name>` | Rename the profile in use (the characters that use it follow) |
+| `/ju profile delete <name>` | Delete a profile (not the last one); the characters that used it use Default from then on |
+| `/ju profile export [<name>]` | Print the profile in use (or the named one) as a `JU1:` string; the **Export** button of the Profiles tab gives one you can copy |
+| `/ju profile import <string>` | Create a profile from a `JU1:` string (it is not switched to); `/ju profile import replace <string>` overwrites a profile of the same name. The chat box takes at most 255 characters, so use the **Import** button for long strings |
 | `/ju dump <item link>` | Shift-click an item into the chat box to see what the API reports for it and how it is scored |
 | `/ju range` | Turn the range check indicator on or off (it toggles) |
 | `/ju range <spell name or id>` | Choose the spell the indicator checks (this character) |
@@ -572,7 +801,7 @@ A quick first session:
    "Equip:" text (text-read mp5, spell power etc. are scored under the main stat and marked `(Equip)` in the breakdown; hit/crit
    percentages use their own "(Equip)" weights). Check that no stat is counted twice.
 4. Look under "Other stats detected on items" in the options window's Add dropdown for stat names the built-in list doesn't know yet.
-5. Open `/ju`, change a weight and check that the tooltip follows. Create, switch and delete a profile.
+5. Open `/ju`, change a weight and check that the tooltip follows. Create, switch and delete a scale. Import a Pawn tag (for example the one shown by **Export**, with another name) and check the weights and the chat message; import it again to see the **Confirm?** step.
 6. Range check: open the **Range Check** tab, pick a spell, target an enemy and walk in and out of range; the icon should
    turn red when out of range and back to normal when in range. By default the indicator sits next to the target's nameplate (enemy nameplates must be shown, default key V): target different
    enemies and check that it follows, and that it hides when the target has no nameplate. Switch the **Position** to **Fixed on
@@ -614,11 +843,25 @@ A quick first session:
     selection, and Default should put the client's order back. `/ju profit` lists the same order in chat. Compare a recipe's profit with Auctionator's own line in the
     recipe's window. `/ju recipes <item>` and `/ju materials` should show a profit on each recipe and a **Sort** button. Untick **Show crafting profit** in the Recipes
     tab (or disable Auctionator and `/reload`): all of that disappears, the list is Blizzard's again and nothing errors; enable Auctionator again and your choices are back.
+16. Profession window: tick **Keep the profession window open (movable)** in the *Recipes* tab, open a profession, then open the character panel, the spellbook and
+    a merchant: the profession window should stay where it is. Drag it by its title bar, close it, open it again (and `/reload`): it should come back where you left it.
+    Untick the option (with the window closed): the window should behave as Blizzard's again, closed by the other panels. Try ticking it with the window open
+    (it should apply after you close the window) and Escape (it should still close it).
+17. Auction house scores: with two scales listed, open the auction house, search for armor or weapons and check that the Browse list has a narrow score column per scale (up to three) that still fits a score like 1234.5, then search for a reagent and check that the columns are gone. Hover a
+    tooltip of one of the items and compare its Stat Weight lines with the columns. Click a header: the rows should reorder (highest first, items without a score at the end) and the header gets an arrow;
+    click a row after sorting and check that the buy window shows that row's item (try a random-suffix item with two suffixes, "of the Eagle" and "of the Bear", which should show different scores).
+    Scroll down to load more results: they are sorted in. Click the header again, or the Price header: the auction house's order is back. Untick the check box in the Stat Weights tab (or `/ju stats off`):
+    the columns disappear and the list is Blizzard's. Check that Auctionator's own tabs work as before. Items that load slowly start with an empty score that fills in a moment later.
+18. Resizable auction house: open the auction house and check for a grip in its bottom right corner (hover it for the tooltip). Drag it down and to the right: the whole window should grow
+    (the categories list on the left taller, the Browse results, the buy and sell pages, the Auctions tab and Auctionator's tabs wider and taller, the columns of the lists spread over the new width, the score columns still there), and
+    it should not go smaller than the original size or off the screen. Close and reopen the window (and `/reload`): the size is kept. Right-click the grip: the default size is back. Untick **Resizable auction
+    house window** in the Stat Weights tab: the grip disappears and the window has its default size; tick it again: the dragged size is back. Check that Auctionator's buttons in the bottom right corner are not covered by the grip.
 
 ## Files
 
 - `Stats.lua` - stat definitions and labels
-- `Core.lua` - saved variables, profiles, weights, settings, the stat weights on/off, slash commands (including `/ju status` and `/ju stats`)
+- `Core.lua` - saved variables, scales (stored as profiles), weights, settings, the stat weights on/off, slash commands (including `/ju status` and `/ju stats`)
+- `PawnScales.lua` - Pawn scale tags: reading and writing them, the import and export of a scale
 - `Tooltip.lua` - stat collection, scoring and the tooltip line
 - `RangeCheck.lua` - the range check indicator, its settings and the `/ju range` command
 - `Recipes.lua` - recipe scanning and saved data, the skill-up chance, item lookup, the results window, the key binding function and `/ju recipes`
@@ -629,19 +872,26 @@ A quick first session:
 - `MailMaterials.lua` - the recipe materials in your mail: inbox scan, the window (grouped by character) and `/ju materials`
 - `Minimap.lua` - the minimap button, its saved position, the addon compartment callbacks and `/ju minimap`
 - `Profit.lua` - the crafting profit from Auctionator's prices (the formula, its text, the sort order), the sort of the profession window's recipe list and `/ju profit`
+- `ProfessionWindow.lua` - the option that keeps the profession window out of Blizzard's panel layout and makes it movable
+- `AuctionScores.lua` - the stat weight score columns of the auction house's Browse tab and the sort by them
+- `AuctionHouseResize.lua` - the grip that makes the auction house window resizable (the size, the categories list, the item list layouts)
 - `Pin.lua` - the map pin command, `/ju pin`
 - `Media\MinimapIcon.tga` - the icon of the minimap button and of the addon compartment entry (64x64, 32-bit with alpha)
 - `Bindings.xml` - the "Find recipes using hovered item" key binding (loaded automatically, not listed in the `.toc`)
-- `Options.lua` - the options window (all tabs and the footer check box) and its Settings > AddOns entry
+- `SettingsProfiles.lua` - the settings profiles: what a profile holds, the snapshot kept in step with the live settings, applying a profile, the export and import strings and `/ju profile`
+- `Options.lua` - the options window (all tabs, the footer check box and the grip that resizes it, the import and export box) and its Settings > AddOns entry
 
 ### Saved data
 
-Saved data lives in `JimmysStatWeightsDB` (account-wide: profiles, settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, its `hiddenProfessions`, `onlyMyProfessions` (the check box of the recipes window) and the `size` of that window, last tab, and the
+Saved data lives in `JimmysStatWeightsDB` (account-wide: `profiles` with the stat weight scales, each scale's `hiddenFor` (the characters that leave it out of their item tooltips, `{ ["Name-Realm"] = true }`; a scale nobody hides has none, so a new scale is shown to everyone), `activeProfile` with the scale each character has active (`{ ["Name-Realm"] = scale name }`; a character without an entry, or whose scale was deleted, uses `Default`, else the first scale by name), and `profileRenames` with the old names of renamed scales (`{ [old name] = new name }`; it exists only to move the choices of a character that still has them in its own saved variables, see below; a scale created with an old name removes that entry and deleting a scale removes the entries that lead to it). Renaming a scale moves its table, so `hiddenFor` follows, and rewrites the matching `activeProfile` entries; deleting one removes the entries that point at it; `optionsSize` with the size of the options window (only when it is not the default one), settings, detected stats, `stats` with the on/off of the tooltip scores, range check options (`range`, including its on/off), `recipeLookup` with the on/off of the recipe lookup, its `hiddenProfessions`, `onlyMyProfessions` (the check box of the recipes window) and the `size` of that window, last tab, and the
 saved recipes: `recipes`, `recipeKnownBy` with the characters that know each recipe as `Name-Realm`, and `itemNames` with the names
 of ingredients, and `recipeSkill` with each character's rank and maximum in each profession; and the recent mail recipients: `mail` with the on/off setting of both mail features and `mailRecipients` with one list of names per realm; and `mailMaterials` with the position of
-the materials window, its `size`, `showOthers`, `hiddenProfessions` and `sortProfit`; and `profit` with the on/off of the crafting profit and the sort of the profession list (`enabled`, `listSort`); `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
-(with the times they were seen), and `accountBank` with the account bank's items; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the active profile, and the range check spell; older versions also kept `mailItems`, the last scan of the mailbox, here: it is moved into `inventory` at load). The variable names are unchanged from the
+the materials window, its `size`, `showOthers`, `hiddenProfessions` and `sortProfit`; and `profit` with the on/off of the crafting profit and the sort of the profession list (`enabled`, `listSort`); `professionWindow` with the option that keeps the profession window out of Blizzard's panel layout (`detached`) and its saved `position`; `settingsProfiles` with the [settings profiles](#profiles-tab-settings-profiles) (`{ ["Name"] = { settings = {...}, stats = {...}, range = {...}, ... } }`, each with only the settings listed there, cleaned at load) and `activeSettingsProfile` with the profile each character uses (`{ ["Name-Realm"] = profile name }`; a character without an entry, or whose profile was deleted, uses `Default`, else the first profile by name); `auctionScores` with the option of the auction house columns and the scale the Browse list is sorted by (`enabled`, `sortProfile`); `auctionHouseSize` with the option of the resizable auction house window and the size it was left at (`enabled`, `width`, `height`); `inventory` with, per character (`Name-Realm`), the item counts in its `bags` and `bank` and the last scan of its `mail`
+(with the times they were seen), and `accountBank` with the account bank's items; and `minimap` with `hide` and the `angle` of the minimap button) and `JimmysStatWeightsCharDB` (per character: the range check spell; older versions also kept the active scale (`profile`) and `hiddenProfiles`, the scales left out of item tooltips, here: the first time the character's `Name-Realm` is known (at load, or at `PLAYER_LOGIN` when the realm was not known earlier) they are moved into `activeProfile` and the scales' `hiddenFor`, following `profileRenames` for renames done since the character last logged in, and removed from here; a character that already has an `activeProfile` entry or a scale hidden for it in the account data keeps that data and its old values are only dropped; and `mailItems`, the last scan of the mailbox: it is moved into `inventory` at load). The variable names are unchanged from the
 addon's previous name, but the client stores them in a file named after the addon folder, i.e. now
 `WTF\Account\<account>\SavedVariables\JimmysUtils.lua` and `WTF\Account\<account>\<realm>\<character>\SavedVariables\JimmysUtils.lua`.
+Older versions sometimes saved a character as `Name` without its realm (while the client did not know it yet). At login such a key (in the saved recipes, skills and item snapshots) is
+moved to `Name-Realm`: the current character to the current realm, another name to the realm the saved data already has for that name when there is exactly one, and to the
+current realm when the saved data has none (it is of this account, so very likely a character of this realm); a name saved under several realms is dropped, because nothing says which one it was.
 To keep the data of the old Jimmy's Stat Weights, log out and rename its `JimmysStatWeights.lua` files (the account-wide one and the
 per-character ones) to `JimmysUtils.lua`, and remove the old `JimmysStatWeights` addon folder so both are not loaded.

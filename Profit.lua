@@ -64,6 +64,7 @@ local DEFAULTS = {
 	listSort = "blizzard",
 }
 local LIST_SORTS = { blizzard = true, profit = true }
+ns.PROFIT_LIST_SORTS = LIST_SORTS -- the settings profiles (SettingsProfiles.lua) clean the setting with it
 -- Settings of the panel docked to the profession window that an older version kept; removed at load.
 local OLD_SETTINGS = { "panelOpen", "sort", "descending", "onlyProfitable", "hideUnpriced" }
 
@@ -764,6 +765,9 @@ end
 -- Sorting failed: the setting goes back to the client's order, with one message.
 local function SortFailed(err)
 	settings.listSort = "blizzard"
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	ns.Print("Sorting the profession list by crafting profit failed and has been turned off: " .. tostring(err))
 end
 
@@ -840,6 +844,29 @@ local function SetListSort(mode)
 	if ns.RefreshRecipesPage then
 		ns.RefreshRecipesPage() -- the check box of the Recipes tab follows the menu
 	end
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
+end
+
+-- Stores a sort mode from a settings profile ("blizzard" or "profit"), even while SkillUp Forever sorts the list (SetListSort does not take
+-- "profit" then: the check box is greyed out): the choice is kept and shows again when it does not. Applied to the list like a choice made
+-- in the menu. Returns false for a bad call.
+function ns.ApplyProfitListSort(mode)
+	if not (settings and LIST_SORTS[mode]) then
+		return false
+	end
+	if settings.listSort ~= mode then
+		settings.listSort = mode
+		ApplyCurrentList()
+		if ns.RefreshRecipesPage then
+			ns.RefreshRecipesPage()
+		end
+		if ns.SettingsChanged then
+			ns.SettingsChanged()
+		end
+	end
+	return true
 end
 
 -- The check box of the Recipes tab (and the gamepad interface, whose menu this addon does not touch): the profit sort of the list on
@@ -1072,6 +1099,9 @@ function ns.SetProfitEnabled(enabled)
 	end
 	settings.enabled = enabled
 	RefreshProfitUI()
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	return true
 end
 

@@ -261,19 +261,159 @@ local function GetCharacterKey()
 		local okRealm, value = pcall(GetRealmName)
 		realm = okRealm and PlainString(value) or nil
 		realm = realm and realm:gsub("%s", "") or nil
+		realm = PlainString(realm)
+	end
+	if not realm and UnitFullName then
+		local okFull, _, value = pcall(UnitFullName, "player")
+		realm = okFull and PlainString(value) or nil
+		realm = realm and PlainString((realm:gsub("%s", ""))) or nil
+	end
+	if not realm and ns.playerLoggedIn and knownBy and skills then
+		-- Still no realm after the login: the client tells none at all (as WoW Forever often does). The realm this character's name
+		-- is saved under stands for it when there is exactly one; otherwise the name alone is the key, as older versions did (it is
+		-- folded into "Name-Realm" once a realm is known, ns.MergeRealmlessKeys). Worked out once per session.
+		if ns.savedRealm == nil then
+			local seen, found, count = {}, nil, 0
+			local function Note(key)
+				local keyName, keyRealm = nil, nil
+				if type(key) == "string" then
+					keyName, keyRealm = key:match("^([^%-]+)%-(.+)$")
+				end
+				if keyName == name and not seen[keyRealm] then
+					seen[keyRealm] = true
+					found, count = keyRealm, count + 1
+				end
+			end
+			for _, characters in pairs(knownBy) do
+				for character in pairs(characters) do
+					Note(character)
+				end
+			end
+			for character in pairs(skills) do
+				Note(character)
+			end
+			for _, key in ipairs(ns.GetInventoryKeys and ns.GetInventoryKeys() or {}) do
+				Note(key)
+			end
+			ns.savedRealm = count == 1 and found or false
+		end
+		if not ns.savedRealm then
+			return name
+		end
+		realm = ns.savedRealm
 	end
 	if realm then
+		-- Older versions saved "Name" when the realm was not known yet (early in the login); fold those into "Name-Realm" once. This
+		-- is also done at PLAYER_LOGIN (see ns.InitRecipes), so the data is already right when a window first asks for it.
+		if knownBy and skills and not ns.realmlessKeysMerged then
+			ns.realmlessKeysMerged = true
+			ns.MergeRealmlessKeys(realm, name)
+		end
 		return name .. "-" .. realm, realm
 	end
-	return name
+	-- Not known yet (before the login, when the realm usually arrives; Core.lua keeps the first key it gets).
+	return nil
 end
 
 ns.GetCharacterKey = GetCharacterKey
+ns.playerLoggedIn, ns.savedRealm = nil, nil -- (set by the login and GetCharacterKey)
+
+-- Moves the data saved under a realm-less "Name" key (the recipes, the skills and the item snapshots) to "Name-Realm". The key of the
+-- current character (ownName) goes to ownRealm; any other name goes to the realm the saved data already uses for that name when there
+-- is exactly one, and to ownRealm when the saved data has no realm for it at all (the data is of this account, so it is very likely a
+-- character of this realm). With more than one realm nothing says which character it was, so the entry is dropped rather than given
+-- a realm that may be wrong.
+function ns.MergeRealmlessKeys(ownRealm, ownName)
+	if type(ownRealm) ~= "string" or ownRealm == "" or not knownBy or not skills then
+		return
+	end
+	local realmsOf = {}
+	local function Note(key)
+		local name, realm = key:match("^([^%-]+)%-(.+)$")
+		if name then
+			realmsOf[name] = realmsOf[name] or {}
+			realmsOf[name][realm] = true
+		end
+	end
+	for _, characters in pairs(knownBy) do
+		for character in pairs(characters) do
+			Note(character)
+		end
+	end
+	for character in pairs(skills) do
+		Note(character)
+	end
+	if ns.GetInventoryKeys then
+		for _, key in ipairs(ns.GetInventoryKeys()) do
+			Note(key)
+		end
+	end
+	local function Target(name)
+		if name == ownName then
+			return name .. "-" .. ownRealm
+		end
+		local only, count = nil, 0
+		for realm in pairs(realmsOf[name] or {}) do
+			only, count = realm, count + 1
+		end
+		if count == 0 then
+			return name .. "-" .. ownRealm
+		elseif count == 1 then
+			return name .. "-" .. only
+		end
+		return nil
+	end
+
+	for _, characters in pairs(knownBy) do
+		local moved = {}
+		for character in pairs(characters) do
+			if not character:find("-", 1, true) then
+				moved[#moved + 1] = character
+			end
+		end
+		for _, character in ipairs(moved) do
+			characters[character] = nil
+			local target = Target(character)
+			if target then
+				characters[target] = true
+			end
+		end
+	end
+
+	local moved = {}
+	for character in pairs(skills) do
+		if not character:find("-", 1, true) then
+			moved[#moved + 1] = character
+		end
+	end
+	for _, character in ipairs(moved) do
+		local old, target = skills[character], Target(character)
+		skills[character] = nil
+		local current = target and skills[target]
+		if not target then
+			-- (dropped)
+		elseif type(current) ~= "table" then
+			skills[target] = old
+		elseif type(old) == "table" then
+			for profession, info in pairs(old) do
+				local have = current[profession]
+				if type(have) ~= "table" or (type(info) == "table" and (tonumber(info.time) or 0) > (tonumber(have.time) or 0)) then
+					current[profession] = info
+				end
+			end
+		end
+	end
+
+	if ns.MergeRealmlessInventory then
+		ns.MergeRealmlessInventory(Target)
+	end
+	InvalidateRows() -- the rows hold character names
+end
 
 -- Character name as shown to the player: the realm is dropped for characters of the current realm.
 local function FormatCharacter(key, ownRealm)
 	local name, realm = key:match("^([^%-]+)%-(.+)$")
-	if name and realm == ownRealm then
+	if name and (realm == ownRealm or ownRealm == nil) then
 		return name
 	end
 	return key
@@ -532,6 +672,25 @@ function ns.SetRecipeProfessionHidden(profession, hidden)
 	lookup.hiddenProfessions[key] = hidden and true or nil
 	if window and window:IsShown() then
 		RefreshWindow()
+	end
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
+	return true
+end
+
+-- Sets one of the two other options of the recipes window, for a settings profile ("onlyMyProfessions" or "sortProfit", a boolean), and
+-- refreshes the open window. Returns false for a name or value that is not usable.
+function ns.SetRecipeWindowOption(name, value)
+	if not lookup or (name ~= "onlyMyProfessions" and name ~= "sortProfit") or type(value) ~= "boolean" then
+		return false
+	end
+	lookup[name] = value
+	if window and window:IsShown() then
+		RefreshWindow()
+	end
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
 	end
 	return true
 end
@@ -3191,6 +3350,9 @@ local function BuildWindow()
 	ui.sortButton:SetScript("OnClick", function()
 		if lookup then
 			lookup.sortProfit = not lookup.sortProfit
+			if ns.SettingsChanged then
+				ns.SettingsChanged()
+			end
 		end
 		ui.scroll:SetVerticalScroll(0)
 		RefreshWindow()
@@ -3224,6 +3386,9 @@ local function BuildWindow()
 	ui.onlyMine:SetScript("OnClick", function(self)
 		if lookup then
 			lookup.onlyMyProfessions = self:GetChecked() and true or false
+			if ns.SettingsChanged then
+				ns.SettingsChanged()
+			end
 		end
 		ui.scroll:SetVerticalScroll(0)
 		RefreshWindow()
@@ -3644,6 +3809,9 @@ function ns.SetRecipeLookupEnabled(enabled)
 			linkPopup:Hide()
 		end
 	end
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	return true
 end
 
@@ -3866,6 +4034,10 @@ function ns.InitRecipes(database)
 		pcall(driver.RegisterEvent, driver, event)
 	end
 	driver:SetScript("OnEvent", function(_, event, ...)
+		if event == "PLAYER_LOGIN" then
+			ns.playerLoggedIn = true
+			GetCharacterKey() -- the realm is known now: folds the keys saved without one, before any window asks for a name
+		end
 		-- Off: nothing is learned and the saved recipes are left alone. The names of the items asked for earlier still arrive.
 		if not ns.IsRecipeLookupEnabled() and event ~= "ITEM_DATA_LOAD_RESULT" then
 			return

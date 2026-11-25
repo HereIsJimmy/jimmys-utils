@@ -165,6 +165,15 @@ function ns.GetInventory(key)
 	return GetEntry(key, false)
 end
 
+-- The keys of the characters that have a snapshot (for ns.MergeRealmlessKeys in Recipes.lua).
+function ns.GetInventoryKeys()
+	local keys = {}
+	for key in pairs(inventory or {}) do
+		keys[#keys + 1] = key
+	end
+	return keys
+end
+
 -- The account bank: { items, time } (read only), or nil when it was never seen.
 function ns.GetAccountBank()
 	return db and db.accountBank or nil
@@ -194,6 +203,52 @@ function ns.SetMailSnapshot(key, snapshot)
 	end
 	entry.mail = snapshot
 	return true
+end
+
+-- Moves the snapshots saved under a realm-less "Name" key to the key target(name) gives ("Name-Realm"; nil drops them, see
+-- ns.MergeRealmlessKeys). When the character has a snapshot under both keys each part (bags, bank, mailbox) is the newer one, the
+-- one under the realm on a tie.
+function ns.MergeRealmlessInventory(target)
+	if not inventory or type(target) ~= "function" then
+		return
+	end
+	local moved = {}
+	for key in pairs(inventory) do
+		if type(key) == "string" and not key:find("-", 1, true) then
+			moved[#moved + 1] = key
+		end
+	end
+	if #moved == 0 then
+		return
+	end
+	local function Newer(kept, keptTime, other, otherTime)
+		if other == nil then
+			return kept, keptTime
+		elseif kept == nil or (otherTime or 0) > (keptTime or 0) then
+			return other, otherTime
+		end
+		return kept, keptTime
+	end
+	local function MailTime(mail)
+		return mail and math.max(mail.time or 0, mail.sentTime or 0) or nil
+	end
+	for _, key in ipairs(moved) do
+		local old, name = inventory[key], target(key)
+		inventory[key] = nil
+		if name and type(old) == "table" then
+			local current = inventory[name]
+			if type(current) ~= "table" then
+				inventory[name] = old
+			else
+				local merged = {}
+				merged.bags, merged.bagsTime = Newer(current.bags, current.bagsTime, old.bags, old.bagsTime)
+				merged.bank, merged.bankTime = Newer(current.bank, current.bankTime, old.bank, old.bankTime)
+				merged.mail = Newer(current.mail, MailTime(current.mail), old.mail, MailTime(old.mail))
+				inventory[name] = merged
+			end
+		end
+	end
+	Notify()
 end
 
 -- Removes everything saved for a character. Returns true when there was something.

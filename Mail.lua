@@ -299,6 +299,9 @@ function ns.SetMailEnabled(enabled)
 	if ns.OnMailEnabledChanged then
 		ns.OnMailEnabledChanged(enabled)
 	end
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	return true
 end
 

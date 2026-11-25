@@ -1062,6 +1062,9 @@ local function BuildWindow()
 	ui.showOthers:SetScript("OnClick", function(self)
 		if settings then
 			settings.showOthers = not self:GetChecked()
+			if ns.SettingsChanged then
+				ns.SettingsChanged()
+			end
 		end
 		RefreshWindow()
 	end)
@@ -1090,6 +1093,9 @@ local function BuildWindow()
 	ui.sortButton:SetScript("OnClick", function()
 		if settings then
 			settings.sortProfit = not settings.sortProfit
+			if ns.SettingsChanged then
+				ns.SettingsChanged()
+			end
 		end
 		ui.scroll:SetVerticalScroll(0)
 		RefreshWindow()
@@ -1303,6 +1309,23 @@ function ns.SetMaterialProfessionHidden(profession, hidden)
 	end
 	settings.hiddenProfessions[key] = hidden and true or nil
 	ns.RefreshMailMaterials()
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
+	return true
+end
+
+-- Sets one of the two options of the window that are not a set of professions, for a settings profile ("showOthers" or "sortProfit", a
+-- boolean), and refreshes the open window. Returns false for a name or value that is not usable.
+function ns.SetMaterialsOption(name, value)
+	if not settings or (name ~= "showOthers" and name ~= "sortProfit") or type(value) ~= "boolean" then
+		return false
+	end
+	settings[name] = value
+	ns.RefreshMailMaterials()
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	return true
 end
 

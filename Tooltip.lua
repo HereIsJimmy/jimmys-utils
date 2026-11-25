@@ -142,13 +142,15 @@ function ns.CollectItemStats(link, lines)
 end
 
 -- Returns total, breakdown where breakdown holds one entry per non-zero weight,
--- sorted by absolute contribution (largest first).
-function ns.ComputeScore(stats)
+-- sorted by absolute contribution (largest first). `weights` ({ [statKey] = number })
+-- defaults to the weights of the active profile.
+function ns.ComputeScore(stats, weights)
+	weights = weights or ns.GetActiveProfile().weights
 	local total = 0
 	local breakdown = {}
 
 	for key, entry in pairs(stats) do
-		local weight = ns.GetWeight(key)
+		local weight = weights[key] or 0
 		if weight ~= 0 then
 			local contribution = entry.value * weight
 			total = total + contribution
@@ -236,6 +238,10 @@ local function OnTooltipSetItem(tooltip, data)
 	if not ns.IsStatsEnabled() then
 		return
 	end
+	local profileNames = ns.GetShownProfileNames()
+	if #profileNames == 0 then
+		return
+	end
 
 	local link = ResolveItemLink(data)
 	if not link or not C_Item.IsEquippableItem(link) then
@@ -247,30 +253,35 @@ local function OnTooltipSetItem(tooltip, data)
 		return
 	end
 
-	local total, breakdown = ns.ComputeScore(stats)
-
-	-- Round first so a total that displays as 0 counts as 0 (and never prints "-0.0").
 	local decimals = ns.GetSetting("decimals")
-	if math.abs(total) < 0.5 * 10 ^ -decimals then
-		total = 0
-	end
-	if total == 0 and ns.GetSetting("hideZero") then
-		return
-	end
+	local hideZero = ns.GetSetting("hideZero")
+	local showBreakdown = ShouldShowBreakdown()
+	local named = #ns.GetProfileNames() > 1
 
-	local label = "Stat Weight"
-	if #ns.GetProfileNames() > 1 then
-		label = label .. " (" .. ns.GetActiveProfileName() .. ")"
-	end
-	tooltip:AddDoubleLine(label, string.format("%." .. decimals .. "f", total),
-		LINE_COLOR[1], LINE_COLOR[2], LINE_COLOR[3], 1, 1, 1)
+	-- One line (and its breakdown) per profile listed in the tooltips.
+	for _, profileName in ipairs(profileNames) do
+		local total, breakdown = ns.ComputeScore(stats, ns.GetProfileWeights(profileName))
 
-	if ShouldShowBreakdown() then
-		for _, entry in ipairs(breakdown) do
-			tooltip:AddDoubleLine("  " .. entry.label,
-				ns.FormatNumber(entry.value) .. " x " .. ns.FormatNumber(entry.weight) .. " = " .. ns.FormatNumber(entry.contribution),
-				BREAKDOWN_COLOR[1], BREAKDOWN_COLOR[2], BREAKDOWN_COLOR[3],
-				BREAKDOWN_COLOR[1], BREAKDOWN_COLOR[2], BREAKDOWN_COLOR[3])
+		-- Round first so a total that displays as 0 counts as 0 (and never prints "-0.0").
+		if math.abs(total) < 0.5 * 10 ^ -decimals then
+			total = 0
+		end
+		if not (total == 0 and hideZero) then
+			local label = "Stat Weight"
+			if named then
+				label = label .. " (" .. profileName .. ")"
+			end
+			tooltip:AddDoubleLine(label, string.format("%." .. decimals .. "f", total),
+				LINE_COLOR[1], LINE_COLOR[2], LINE_COLOR[3], 1, 1, 1)
+
+			if showBreakdown then
+				for _, entry in ipairs(breakdown) do
+					tooltip:AddDoubleLine("  " .. entry.label,
+						ns.FormatNumber(entry.value) .. " x " .. ns.FormatNumber(entry.weight) .. " = " .. ns.FormatNumber(entry.contribution),
+						BREAKDOWN_COLOR[1], BREAKDOWN_COLOR[2], BREAKDOWN_COLOR[3],
+						BREAKDOWN_COLOR[1], BREAKDOWN_COLOR[2], BREAKDOWN_COLOR[3])
+				end
+			end
 		end
 	end
 end

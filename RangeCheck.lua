@@ -53,6 +53,7 @@ local DEFAULTS = {
 -- Icon size in pixels: any whole number in this range (typed in the options window or with /ju range size).
 ns.RANGE_SIZE_MIN, ns.RANGE_SIZE_MAX = 12, 128
 local ANCHOR_MODES = { nameplate = true, screen = true }
+ns.RANGE_ANCHOR_MODES = ANCHOR_MODES -- the settings profiles (SettingsProfiles.lua) clean the setting with it
 local PLATE_OFFSET = 4 -- gap between the nameplate health bar and the indicator
 local PLATE_LEVEL_BOOST = 10 -- frame levels above the nameplate
 
@@ -600,6 +601,9 @@ function ns.SetRangeSetting(name, value)
 	settings[name] = value
 	ApplyLayout()
 	Refresh(true) -- ApplyLayout already placed the indicator
+	if ns.SettingsChanged then
+		ns.SettingsChanged()
+	end
 	return true
 end
 

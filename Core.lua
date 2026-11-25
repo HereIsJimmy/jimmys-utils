@@ -10,10 +10,13 @@ local addonName, ns = ...
 
 	JimmysStatWeightsDB = {
 		dbVersion = 2,
-		profiles = { ["Default"] = { weights = { [statKey] = number } } }, -- only non-zero weights stored
+		profiles = { ["Default"] = { weights = { [statKey] = number }, hiddenFor = { ["Name-Realm"] = true } } }, -- only non-zero weights stored; hiddenFor: the characters that leave the scale out of their item tooltips (absent: shown to everyone)
+		activeProfile = { ["Name-Realm"] = scaleName }, -- the scale each character has active (a character without an entry, or with one for a scale that is gone, uses Default)
 		discovered = { [statKey] = true },
 		settings = { decimals = 1, hideZero = true, breakdown = "alt", parseEquipText = true },
-		optionsTab = "stats", -- last tab of the options window ("stats" | "range" | "recipes" | "mail")
+		optionsTab = "stats", -- last tab of the options window ("stats" | "range" | "recipes" | "mail" | "profiles")
+		optionsSize = { width, height }, -- size of the (resizable) options window, only saved when it differs from the default; cleaned at load
+		profileRenames = { [oldName] = newName }, -- scales that were renamed; only read to move the choices a character still keeps in its own saved variables (see below)
 		stats = { enabled }, -- show the stat weight score on item tooltips (the profile editing always works)
 		range = { enabled, locked, size, anchor, point, x, y }, -- validated in RangeCheck.lua
 		recipeLookup = { enabled, hiddenProfessions = { [lowercase profession] = true } }, -- scan professions and answer the recipe lookup; the professions the recipes window leaves out; validated in Recipes.lua
@@ -22,17 +25,34 @@ local addonName, ns = ...
 		mailRecipients = { [realmKey] = { names } }, -- recent mail recipients, validated in Mail.lua
 		mailMaterials = { position, showOthers, hiddenProfessions = { [lowercase profession] = true }, sortProfit }, -- the "materials in your mail" window, the professions it leaves out and its profit sort, validated in MailMaterials.lua
 		profit = { enabled, listSort }, -- crafting profit from Auctionator prices and the sort of the profession window's recipe list, validated in Profit.lua
+		auctionScores = { enabled, sortProfile }, -- stat weight score columns in the auction house's Browse tab and the profile it is sorted by, validated in AuctionScores.lua
+		auctionHouseSize = { enabled, width, height }, -- the resizable auction house window (the grip in its corner) and the size it was left at, validated in AuctionHouseResize.lua
+		professionWindow = { detached, position = { point, relPoint, x, y } }, -- keep the profession window out of Blizzard's panel layout (movable), validated in ProfessionWindow.lua
 		inventory = { ["Name-Realm"] = { bags, bagsTime, bank, bankTime, mail } }, -- item snapshots (and the last scan of the mailbox) per character, validated in Inventory.lua
 		accountBank = { items, time }, -- the account bank, validated in Inventory.lua
 		minimap = { hide, angle }, -- the minimap button, validated in Minimap.lua
+		settingsProfiles = { ["Name"] = { settings = {...}, stats = {...}, range = {...}, ... } }, -- the settings profiles: named snapshots of the settings of the whole addon (not the scales, see below), validated in SettingsProfiles.lua
+		activeSettingsProfile = { ["Name-Realm"] = profileName }, -- the settings profile each character uses (a character without an entry uses Default)
 	}
-	JimmysStatWeightsCharDB = { profile = "Default", rangeSpell = spellID }
+	JimmysStatWeightsCharDB = { rangeSpell = spellID }
+	-- The choices per character live in the account data (like Pawn's PerCharacterOptions), keyed by ns.GetCharacterKey(): the active scale in
+	-- db.activeProfile and the hidden scales in each scale's hiddenFor. A rename moves the scale's table and rewrites db.activeProfile, so every
+	-- character follows it at once. Older versions kept `profile` and `hiddenProfiles` in the character's own saved variables; the first time
+	-- the character's key is known they are moved into the account data (through db.profileRenames, which is only kept for that: renames
+	-- done since the character last loaded) and removed. A character whose key is already in the account data keeps that data. While the realm
+	-- is not known yet (early in the login) the legacy fields are used as they are.
 	-- (older versions also kept mailItems here: the last scan of the mailbox, now db.inventory[character].mail)
+	-- Not to be confused with the settings profiles of SettingsProfiles.lua (db.settingsProfiles, db.activeSettingsProfile): those hold the
+	-- settings of the whole addon, the "profiles" of the options window's Profiles tab and of /ju profile. The stat weight scales above
+	-- are called "scales" wherever the player sees them (/ju scale) and stay "profiles" in the code (db.profiles, ns.*Profile*).
 ]]
 
 local DB_VERSION = 2
 local DEFAULT_PROFILE = "Default"
 local MAX_PROFILE_NAME = 32
+ns.MAX_PROFILE_NAME = MAX_PROFILE_NAME -- the longest scale name (UTF-8 characters); PawnScales.lua shortens imported names to it
+local OPTIONS_WIDTH, OPTIONS_HEIGHT = 400, 510
+ns.OPTIONS_WIDTH, ns.OPTIONS_HEIGHT = OPTIONS_WIDTH, OPTIONS_HEIGHT -- the default (and smallest) size of the options window (Options.lua)
 local CHAT_PREFIX = "|cff66c7ffJimmy's Utils|r: "
 
 local DEFAULT_SETTINGS = {
@@ -48,8 +68,9 @@ local DEFAULT_STATS = {
 }
 
 local BREAKDOWN_MODES = { always = true, shift = true, alt = true, ctrl = true, never = true }
+ns.BREAKDOWN_MODES = BREAKDOWN_MODES -- the settings profiles (SettingsProfiles.lua) clean the setting with it
 
-local OPTIONS_TABS = { stats = true, range = true, recipes = true, mail = true }
+local OPTIONS_TABS = { stats = true, range = true, recipes = true, mail = true, profiles = true }
 local DEFAULT_TAB = "stats"
 
 -- Set in ADDON_LOADED.
@@ -189,6 +210,21 @@ function ns.NotifyConfigChanged()
 	end
 end
 
+-- A setting that a settings profile holds changed (set by the player or by a slash command): the active profile of the character follows.
+-- Called by every setter of those settings; a no-op where SettingsProfiles.lua is not loaded.
+function ns.SettingsChanged()
+	if ns.SyncSettingsProfile then
+		ns.SyncSettingsProfile()
+	end
+end
+
+-- The profiles, weights or display settings changed: the score columns of the auction house follow.
+local function ScoresChanged()
+	if ns.RefreshAuctionScores then
+		ns.RefreshAuctionScores()
+	end
+end
+
 --------------------------------------------------------------------------------
 -- SavedVariables
 --------------------------------------------------------------------------------
@@ -223,6 +259,129 @@ local function CopyWeights(source)
 	return weights
 end
 
+-- The name a scale goes by now: `name` itself when a scale of that name exists, else what db.profileRenames says it became (followed along a
+-- chain of renames; a loop in the data ends the walk). Returns the last name reached, which may still not exist.
+local function ResolveRenamedProfile(profiles, renames, name)
+	local seen = {}
+	while type(name) == "string" and not profiles[name] and not seen[name] do
+		seen[name] = true
+		local nextName = renames[name]
+		if type(nextName) ~= "string" then
+			break
+		end
+		name = nextName
+	end
+	return name
+end
+
+-- The saved map of renamed scales, { [oldName] = newName }, cleaned for use: text names only, an old name that is not a scale any more,
+-- and every entry pointing straight at the scale it ended up as (chains followed). Entries that lead nowhere (a deleted scale, a loop)
+-- are dropped. Always returns a new table, never nil.
+local function CleanProfileRenames(profiles, renames)
+	local clean = {}
+	if type(renames) ~= "table" then
+		return clean
+	end
+	local MAX_BYTES = MAX_PROFILE_NAME * 4 -- UTF-8 characters take up to four bytes
+	for oldName, newName in pairs(renames) do
+		if type(oldName) == "string" and type(newName) == "string" and oldName ~= "" and #oldName <= MAX_BYTES
+			and #newName <= MAX_BYTES and not profiles[oldName] then
+			local target = ResolveRenamedProfile(profiles, renames, newName)
+			if profiles[target] then
+				clean[oldName] = target
+			end
+		end
+	end
+	return clean
+end
+
+-- A saved set of characters, { ["Name-Realm"] = true }, cleaned for use: text keys with the value true only. Returns a new table, or nil
+-- when nothing is left (the scales that nobody hides do not carry an empty table).
+local function CleanCharacterSet(set)
+	if type(set) ~= "table" then
+		return nil
+	end
+	local clean
+	for key, value in pairs(set) do
+		if type(key) == "string" and key ~= "" and value == true then
+			clean = clean or {}
+			clean[key] = true
+		end
+	end
+	return clean
+end
+
+-- The scale this character had before the choices moved into the account data: the stored name, followed through db.profileRenames; nil
+-- when it is not a scale.
+local function LegacyActiveName()
+	if type(charDb.profile) ~= "string" then
+		return nil
+	end
+	local name = ResolveRenamedProfile(db.profiles, db.profileRenames, charDb.profile)
+	return db.profiles[name] and name or nil
+end
+
+-- Brings the legacy fields of this character (charDb.profile, charDb.hiddenProfiles) to a clean form: names resolved through the renames,
+-- only scales that exist, only true values. A field that is not usable becomes nil.
+local function CleanLegacyChoices()
+	charDb.profile = LegacyActiveName()
+	if type(charDb.hiddenProfiles) == "table" then
+		local hidden = {}
+		for name, value in pairs(charDb.hiddenProfiles) do
+			if type(name) == "string" and value == true then
+				name = ResolveRenamedProfile(db.profiles, db.profileRenames, name)
+				if db.profiles[name] then
+					hidden[name] = true
+				end
+			end
+		end
+		charDb.hiddenProfiles = hidden
+	else
+		charDb.hiddenProfiles = nil
+	end
+end
+
+-- The key of this character ("Name-Realm"), once the realm is known; MigrateCharacter has moved its legacy choices by then.
+local charKey
+
+-- Moves the legacy choices of the character `key` into the account data and removes them from charDb. A character that already has account
+-- data (an active scale, or a scale hidden for it) keeps it: the legacy values are stale then (saved by an older build) and only dropped.
+local function MigrateCharacter(key)
+	CleanLegacyChoices()
+	local hasAccountData = db.activeProfile[key] ~= nil
+	if not hasAccountData then
+		for _, profile in pairs(db.profiles) do
+			if profile.hiddenFor and profile.hiddenFor[key] then
+				hasAccountData = true
+				break
+			end
+		end
+	end
+	if not hasAccountData then
+		db.activeProfile[key] = charDb.profile
+		for name in pairs(charDb.hiddenProfiles or {}) do
+			local profile = db.profiles[name]
+			profile.hiddenFor = profile.hiddenFor or {}
+			profile.hiddenFor[key] = true
+		end
+	end
+	charDb.profile = nil
+	charDb.hiddenProfiles = nil
+end
+
+-- The key of the character that is logged in, or nil while the realm is not known yet (ns.GetCharacterKey, Recipes.lua, resolves it when
+-- called). The first time it is known the legacy choices of the character are moved into the account data.
+local function CurrentKey()
+	if not charKey and db and ns.GetCharacterKey then
+		local key = ns.GetCharacterKey()
+		if type(key) == "string" and key ~= "" then
+			charKey = key
+			MigrateCharacter(key)
+		end
+	end
+	return charKey
+end
+
 -- Fills missing fields and drops malformed ones so the rest of the addon can trust the data.
 local function InitSavedVariables()
 	if type(JimmysStatWeightsDB) ~= "table" then
@@ -233,6 +392,7 @@ local function InitSavedVariables()
 	end
 	db = JimmysStatWeightsDB
 	charDb = JimmysStatWeightsCharDB
+	charKey = nil
 
 	local storedVersion = db.dbVersion
 	-- Never lower the version, so data from a newer build is not migrated again after a downgrade.
@@ -319,30 +479,72 @@ local function InitSavedVariables()
 		db.optionsTab = DEFAULT_TAB
 	end
 
-	-- Active profile of this character
-	if type(charDb.profile) ~= "string" or not db.profiles[charDb.profile] then
-		if db.profiles[DEFAULT_PROFILE] then
-			charDb.profile = DEFAULT_PROFILE
-		else
-			charDb.profile = SortedKeys(db.profiles)[1]
+	-- Size of the options window (nil: the default size)
+	db.optionsSize = ns.CleanWindowSize(db.optionsSize, OPTIONS_WIDTH, OPTIONS_HEIGHT)
+
+	-- Scales that were renamed (only needed by characters that still have legacy choices in their own saved variables)
+	db.profileRenames = CleanProfileRenames(db.profiles, db.profileRenames)
+
+	-- The characters that hide each scale
+	for _, profile in pairs(db.profiles) do
+		profile.hiddenFor = CleanCharacterSet(profile.hiddenFor)
+	end
+
+	-- The active scale of each character: text keys, scales that exist
+	local active = {}
+	if type(db.activeProfile) == "table" then
+		for key, name in pairs(db.activeProfile) do
+			if type(key) == "string" and key ~= "" and type(name) == "string" and db.profiles[name] then
+				active[key] = name
+			end
 		end
 	end
+	db.activeProfile = active
+
+	-- This character may have been away while one of its scales was renamed: the legacy choices follow the renames. With the realm
+	-- known they move into the account data right away; else that happens the first time it is known (CurrentKey).
+	CleanLegacyChoices()
+	CurrentKey()
 end
 
 --------------------------------------------------------------------------------
 -- Profiles
 --------------------------------------------------------------------------------
 
+-- The scale a character without a (usable) choice has: Default, else the first one by name.
+local function FallbackProfileName()
+	if db.profiles[DEFAULT_PROFILE] then
+		return DEFAULT_PROFILE
+	end
+	return SortedKeys(db.profiles)[1]
+end
+
 function ns.GetActiveProfileName()
-	return charDb.profile
+	local key = CurrentKey()
+	local name
+	if key then
+		name = db.activeProfile[key]
+	else
+		name = charDb.profile
+	end
+	if type(name) == "string" and db.profiles[name] then
+		return name
+	end
+	return FallbackProfileName()
 end
 
 function ns.GetActiveProfile()
-	return db.profiles[charDb.profile]
+	return db.profiles[ns.GetActiveProfileName()]
 end
 
 function ns.GetProfileNames()
 	return SortedKeys(db.profiles)
+end
+
+-- The weights table of a profile (nil when it does not exist).
+function ns.GetProfileWeights(name)
+	local profile = type(name) == "string" and db.profiles[name]
+	return profile and profile.weights or nil
 end
 
 -- Case-insensitive lookup of an existing profile name; returns the stored spelling.
@@ -361,26 +563,101 @@ local function FindProfileName(name)
 	end
 end
 
+ns.FindProfileName = FindProfileName
+
 function ns.SetActiveProfile(name)
 	if type(name) ~= "string" or not db.profiles[name] then
-		return false, "Profile not found."
+		return false, "Scale not found."
 	end
-	charDb.profile = name
+	local key = CurrentKey()
+	if key then
+		db.activeProfile[key] = name
+	else
+		charDb.profile = name -- the realm is not known yet: kept like older versions did, moved when it is
+	end
 	return true
 end
 
-function ns.CreateProfile(name, copyFromName)
+-- Does this character leave the (existing) profile out of its item tooltips?
+local function IsHiddenHere(name)
+	local key = CurrentKey()
+	if key then
+		local hiddenFor = db.profiles[name].hiddenFor
+		return hiddenFor ~= nil and hiddenFor[key] == true
+	end
+	return type(charDb.hiddenProfiles) == "table" and charDb.hiddenProfiles[name] == true
+end
+
+-- Is the profile listed in item tooltips (by this character)? Unknown profiles are not.
+function ns.IsProfileShown(name)
+	return type(name) == "string" and db.profiles[name] ~= nil and not IsHiddenHere(name)
+end
+
+-- Hiding a profile only leaves it out of the tooltips; its weights are kept.
+function ns.SetProfileShown(name, shown)
+	local existing = FindProfileName(name)
+	if not existing then
+		return false, "Scale not found."
+	end
+	local key = CurrentKey()
+	if key then
+		local profile = db.profiles[existing]
+		if shown then
+			if profile.hiddenFor then
+				profile.hiddenFor[key] = nil
+				if next(profile.hiddenFor) == nil then
+					profile.hiddenFor = nil
+				end
+			end
+		else
+			profile.hiddenFor = profile.hiddenFor or {}
+			profile.hiddenFor[key] = true
+		end
+	elseif shown then
+		if charDb.hiddenProfiles then
+			charDb.hiddenProfiles[existing] = nil
+		end
+	else
+		charDb.hiddenProfiles = charDb.hiddenProfiles or {}
+		charDb.hiddenProfiles[existing] = true
+	end
+	ScoresChanged()
+	return true
+end
+
+-- The profiles listed in item tooltips, sorted like GetProfileNames.
+function ns.GetShownProfileNames()
+	local names = {}
+	for _, name in ipairs(SortedKeys(db.profiles)) do
+		if not IsHiddenHere(name) then
+			names[#names + 1] = name
+		end
+	end
+	return names
+end
+
+-- The scale name as it is kept (trimmed), or nil and an error message when it cannot be one.
+local function ValidateProfileName(name)
 	if type(name) ~= "string" then
-		return false, "Invalid profile name."
+		return nil, "Invalid scale name."
 	end
 	name = Trim(name)
 	-- Count UTF-8 characters, not bytes, to match the edit box's letter limit.
 	local length = select(2, name:gsub("[^\128-\191]", ""))
 	if length == 0 or length > MAX_PROFILE_NAME then
-		return false, "Profile names must be 1-" .. MAX_PROFILE_NAME .. " characters long."
+		return nil, "Scale names must be 1-" .. MAX_PROFILE_NAME .. " characters long."
+	end
+	return name
+end
+
+function ns.CreateProfile(name, copyFromName)
+	local err
+	name, err = ValidateProfileName(name)
+	if not name then
+		return false, err
 	end
 	if FindProfileName(name) then
-		return false, "A profile named \"" .. name .. "\" already exists."
+		return false, "A scale named \"" .. name .. "\" already exists."
 	end
 
 	local weights
@@ -389,27 +666,134 @@ function ns.CreateProfile(name, copyFromName)
 	else
 		local source = db.profiles[copyFromName]
 		if not source then
-			return false, "Profile to copy not found."
+			return false, "Scale to copy not found."
 		end
 		weights = CopyWeights(source.weights)
 	end
-	db.profiles[name] = { weights = weights }
+	db.profiles[name] = { weights = weights } -- no hiddenFor: shown to every character
+	if type(charDb.hiddenProfiles) == "table" then
+		charDb.hiddenProfiles[name] = nil
+	end
+	-- The name now means this scale, not the one that used to have it.
+	db.profileRenames[name] = nil
+	ScoresChanged()
+	return true
+end
+
+-- Gives a scale another name: its table moves (so the weights and the characters that hide it go along), the active scale of every character
+-- and the scale the auction house is sorted by follow. The name is checked like a new one; it may only match the scale itself (a change of
+-- case). `old` has to be the stored spelling. Returns true, or false and an error message.
+function ns.RenameProfile(old, new)
+	if type(old) ~= "string" or not db.profiles[old] then
+		return false, "Scale not found."
+	end
+	local name, err = ValidateProfileName(new)
+	if not name then
+		return false, err
+	end
+	if name == old then
+		return false, "The scale is already named \"" .. old .. "\"."
+	end
+	local lowered = name:lower()
+	for existing in pairs(db.profiles) do
+		if existing ~= old and existing:lower() == lowered then
+			return false, "A scale named \"" .. existing .. "\" already exists."
+		end
+	end
+
+	db.profiles[name] = db.profiles[old]
+	db.profiles[old] = nil
+	for key, active in pairs(db.activeProfile) do
+		if active == old then
+			db.activeProfile[key] = name
+		end
+	end
+	-- The legacy choices of this character, while its realm is not known (no key to move them to yet)
+	if charDb.profile == old then
+		charDb.profile = name
+	end
+	if type(charDb.hiddenProfiles) == "table" then
+		charDb.hiddenProfiles[name] = charDb.hiddenProfiles[old]
+		charDb.hiddenProfiles[old] = nil
+	end
+	local scores = db.auctionScores
+	if type(scores) == "table" and scores.sortProfile == old then
+		scores.sortProfile = name
+	end
+
+	-- Remember it for the characters that still keep legacy choices under the old name (not moved into the account data yet): the new name is
+	-- a scale again (not a name that used to be), whatever pointed at the old name points at the new one, and the old name leads to it.
+	local renames = db.profileRenames
+	renames[name] = nil
+	for from, to in pairs(renames) do
+		if to == old then
+			renames[from] = name
+		end
+	end
+	renames[old] = name
+	ScoresChanged()
 	return true
 end
 
 function ns.DeleteProfile(name)
 	if type(name) ~= "string" or not db.profiles[name] then
-		return false, "Profile not found."
+		return false, "Scale not found."
 	end
 	if next(db.profiles, next(db.profiles)) == nil then
-		return false, "You cannot delete the last remaining profile."
+		return false, "You cannot delete the last remaining scale."
 	end
 
-	db.profiles[name] = nil
-	-- Other characters fall back to a valid profile when they next load.
-	if charDb.profile == name then
-		charDb.profile = SortedKeys(db.profiles)[1]
+	db.profiles[name] = nil -- the characters that hide it go with it
+	for key, active in pairs(db.activeProfile) do
+		if active == name then
+			db.activeProfile[key] = nil -- they use the fallback (Default, else the first scale) from now on
+		end
 	end
+	local scores = db.auctionScores
+	if type(scores) == "table" and scores.sortProfile == name then
+		scores.sortProfile = nil
+	end
+	if type(charDb.hiddenProfiles) == "table" then
+		charDb.hiddenProfiles[name] = nil
+	end
+	if charDb.profile == name then
+		charDb.profile = nil
+	end
+	-- Nothing is left for the old names of this scale to lead to.
+	for from, to in pairs(db.profileRenames) do
+		if to == name then
+			db.profileRenames[from] = nil
+		end
+	end
+	ScoresChanged()
+	return true
+end
+
+-- Replaces the weights of a scale with the given ones (key -> number); only finite non-zero numbers under string keys are kept.
+-- The name has to be the stored spelling. Used by the Pawn import. With `replaceable` (a function of a stat key), only the weights
+-- of the keys it accepts are replaced or cleared; the others stay as they are.
+function ns.ReplaceProfileWeights(name, weights, replaceable)
+	local profile = type(name) == "string" and db.profiles[name]
+	if not profile then
+		return false, "Scale not found."
+	end
+	local clean = {}
+	if type(replaceable) == "function" then
+		for key, value in pairs(profile.weights) do
+			if not replaceable(key) then
+				clean[key] = value
+			end
+		end
+	end
+	if type(weights) == "table" then
+		for key, value in pairs(weights) do
+			if type(key) == "string" and IsFiniteNumber(value) and value ~= 0 then
+				clean[key] = value
+			end
+		end
+	end
+	profile.weights = clean
+	ScoresChanged()
 	return true
 end
 
@@ -431,10 +815,12 @@ function ns.SetWeight(key, value)
 	else
 		weights[key] = value
 	end
+	ScoresChanged()
 end
 
 function ns.ResetActiveProfile()
 	ns.GetActiveProfile().weights = GetDefaultWeights()
+	ScoresChanged()
 end
 
 --------------------------------------------------------------------------------
@@ -459,12 +845,16 @@ function ns.SetSetting(name, value)
 		return
 	end
 	db.settings[name] = value
+	ScoresChanged()
+	ns.SettingsChanged()
 end
 
 function ns.ResetSettings()
 	for name, default in pairs(DEFAULT_SETTINGS) do
 		db.settings[name] = default
 	end
+	ScoresChanged()
+	ns.SettingsChanged()
 end
 
 --------------------------------------------------------------------------------
@@ -481,6 +871,8 @@ function ns.SetStatsEnabled(enabled)
 		return false
 	end
 	db.stats.enabled = enabled
+	ScoresChanged()
+	ns.SettingsChanged()
 	return true
 end
 
@@ -495,6 +887,21 @@ end
 function ns.SetOptionsTab(tab)
 	if OPTIONS_TABS[tab] then
 		db.optionsTab = tab
+	end
+end
+
+-- The saved size of the options window as width, height (nil when it has the default size).
+function ns.GetOptionsSize()
+	local size = db and db.optionsSize
+	if size then
+		return size[1], size[2]
+	end
+end
+
+-- Saves the size of the options window, kept inside ns.GetWindowBounds (nothing is saved for the default size).
+function ns.SetOptionsSize(width, height)
+	if db then
+		db.optionsSize = ns.CleanWindowSize({ width, height }, OPTIONS_WIDTH, OPTIONS_HEIGHT)
 	end
 end
 
@@ -540,13 +947,17 @@ local HELP_LINES = {
 	"/ju - open or close the options window (aliases: /jimmysutils, /jsw, /statweights)",
 	"/ju status - show which features (stat weight scores, range check, recipe lookup, mail) are on or off",
 	"/ju stats - show whether the stat weight scores on item tooltips are on; /ju stats on | off - turn them on or off",
-	"/ju list - show the non-zero weights of the active profile",
+	"/ju list - show the non-zero weights of the active scale",
 	"/ju set <stat> <number> - set a weight (stat key, label or unique label prefix)",
-	"/ju profile - show profiles; /ju profile <name> - switch to a profile",
-	"/ju profile new <name> - create a profile with default weights and switch to it",
-	"/ju profile copy <name> - copy the active profile and switch to the copy",
-	"/ju profile delete <name> - delete a profile",
-	"/ju reset - reset the active profile's weights to the defaults",
+	"/ju scale - show the stat weight scales; /ju scale <name> - switch to a scale",
+	"/ju scale new <name> - create a scale with default weights and switch to it",
+	"/ju scale copy <name> - copy the active scale and switch to the copy",
+	"/ju scale rename <new name> - rename the active scale (your other characters follow the new name when they log in)",
+	"/ju scale delete <name> - delete a scale",
+	"/ju scale show <name> | hide <name> - list a scale in item tooltips / leave it out (its weights are kept)",
+	"/ju scale import <Pawn scale tag> - create a scale from a Pawn tag and switch to it; import replace <tag> overwrites a scale of the same name (chat takes at most 255 characters: for long tags use the Import button of the options window)",
+	"/ju scale export [<name>] - print the active (or the named) scale as a Pawn scale tag (the Export button of the options window gives one you can copy)",
+	"/ju reset - reset the active scale's weights to the defaults",
 	"/ju dump <item link> - show what the API reports for an item and how it is scored",
 	"/ju range - turn the range check indicator on or off",
 	"/ju range <spell name or id> - choose the spell the indicator checks",
@@ -563,6 +974,10 @@ local HELP_LINES = {
 	"/ju mail - show whether the mail features (recent recipients and mail materials) are on; /ju mail on | off - turn them on or off",
 	"/ju mail clear - forget the recent mail recipients of this realm",
 	"/ju minimap - show or hide the minimap button; /ju minimap reset - move it back to its default place",
+	"/ju profile - show the settings profiles (the whole addon's settings, not the stat weight scales); /ju profile <name> - switch this character to a profile",
+	"/ju profile new <name> - save the current settings as a new profile and switch to it; /ju profile copy <name> - copy the active profile and switch to the copy",
+	"/ju profile rename <new name> - rename the active profile; /ju profile delete <name> - delete a profile (the characters that used it fall back to Default)",
+	"/ju profile export [<name>] - print the active (or the named) profile as a text string; /ju profile import <string> - create a profile from one; import replace <string> overwrites a profile of the same name (chat takes at most 255 characters: for long strings use the Import button of the options window's Profiles tab)",
 	"/ju profit - list the open profession's learned recipes by crafting profit in chat (needs Auctionator); /ju profit <name> shows a recipe's prices",
 	"/ju pin - put the map pin where you stand",
 	"/ju pin <x> <y> - put the map pin in your current zone at those coordinates (percent, as the map shows them; for example /ju pin 45.2 67.8)",
@@ -635,7 +1050,7 @@ function ns.FindStat(text)
 end
 
 local function PrintList()
-	ns.Print("Weights of profile \"" .. ns.GetActiveProfileName() .. "\":")
+	ns.Print("Weights of scale \"" .. ns.GetActiveProfileName() .. "\":")
 	local weights = ns.GetActiveProfile().weights
 	local shown = 0
 	local function PrintWeight(key)
@@ -671,10 +1086,10 @@ local function PrintList()
 end
 
 local function PrintProfiles()
-	ns.Print("Active profile: " .. ns.GetActiveProfileName())
+	ns.Print("Active scale: " .. ns.GetActiveProfileName())
 	local names = ns.GetProfileNames()
 	for _, name in ipairs(names) do
-		print("  " .. (name == ns.GetActiveProfileName() and "> " or "  ") .. name)
+		print("  " .. (name == ns.GetActiveProfileName() and "> " or "  ") .. name .. (ns.IsProfileShown(name) and "" or " (hidden from tooltips)"))
 	end
 end
 
@@ -693,7 +1108,7 @@ local function HandleSet(rest)
 	end
 
 	ns.SetWeight(key, value)
-	ns.Print(ns.GetStatLabel(key) .. " weight set to " .. ns.FormatNumber(value, 4) .. " (profile \"" .. ns.GetActiveProfileName() .. "\").")
+	ns.Print(ns.GetStatLabel(key) .. " weight set to " .. ns.FormatNumber(value, 4) .. " (scale \"" .. ns.GetActiveProfileName() .. "\").")
 	ns.NotifyConfigChanged()
 end
 
@@ -708,7 +1123,7 @@ local function HandleProfile(rest)
 	local existing = FindProfileName(rest)
 	if existing then
 		ns.SetActiveProfile(existing)
-		ns.Print("Switched to profile \"" .. existing .. "\".")
+		ns.Print("Switched to scale \"" .. existing .. "\".")
 		ns.NotifyConfigChanged()
 		return
 	end
@@ -718,7 +1133,7 @@ local function HandleProfile(rest)
 
 	if sub == "new" or sub == "copy" then
 		if arg == "" then
-			ns.Print("Usage: /ju profile " .. sub .. " <name>")
+			ns.Print("Usage: /ju scale " .. sub .. " <name>")
 			return
 		end
 		local ok, err
@@ -732,11 +1147,23 @@ local function HandleProfile(rest)
 			return
 		end
 		ns.SetActiveProfile(FindProfileName(arg))
-		ns.Print("Created and switched to profile \"" .. ns.GetActiveProfileName() .. "\".")
+		ns.Print("Created and switched to scale \"" .. ns.GetActiveProfileName() .. "\".")
+	elseif sub == "rename" then
+		if arg == "" then
+			ns.Print("Usage: /ju scale rename <new name>")
+			return
+		end
+		local old = ns.GetActiveProfileName()
+		local ok, err = ns.RenameProfile(old, arg)
+		if not ok then
+			ns.Print(err)
+			return
+		end
+		ns.Print("Renamed scale \"" .. old .. "\" to \"" .. ns.GetActiveProfileName() .. "\".")
 	elseif sub == "delete" then
 		local name = FindProfileName(arg)
 		if not name then
-			ns.Print(arg == "" and "Usage: /ju profile delete <name>" or "Profile not found.")
+			ns.Print(arg == "" and "Usage: /ju scale delete <name>" or "Scale not found.")
 			return
 		end
 		local ok, err = ns.DeleteProfile(name)
@@ -744,15 +1171,67 @@ local function HandleProfile(rest)
 			ns.Print(err)
 			return
 		end
-		ns.Print("Deleted profile \"" .. name .. "\". Active profile: \"" .. ns.GetActiveProfileName() .. "\".")
+		ns.Print("Deleted scale \"" .. name .. "\". Active scale: \"" .. ns.GetActiveProfileName() .. "\".")
+	elseif sub == "show" or sub == "hide" then
+		local name = FindProfileName(arg)
+		if not name then
+			ns.Print(arg == "" and "Usage: /ju scale " .. sub .. " <name>" or "Scale not found.")
+			return
+		end
+		ns.SetProfileShown(name, sub == "show")
+		if sub == "show" then
+			ns.Print("Scale \"" .. name .. "\" is listed in item tooltips.")
+		else
+			ns.Print("Scale \"" .. name .. "\" is left out of item tooltips (its weights are kept).")
+		end
+	elseif sub == "import" then
+		-- "import replace <tag>" overwrites the weights of a scale of the same name (the options window asks for a second click instead).
+		local replace, tag = false, arg
+		local flag, remainder = arg:match("^(%a+)%s+(.*)$")
+		if flag and flag:lower() == "replace" then
+			replace, tag = true, remainder
+		end
+		if Trim(tag) == "" then
+			ns.Print("Usage: /ju scale import <Pawn scale tag> (the tag looks like ( Pawn: v1: \"Name\": Strength=1, Stamina=0.5 ))")
+			return
+		end
+		local ok, result, info = ns.ImportPawnScale(tag, replace)
+		if not ok then
+			ns.Print(result)
+			if info and info.exists then
+				ns.Print("Use /ju scale import replace <tag> to replace its weights.")
+			end
+			return
+		end
+		ns.Print(ns.FormatPawnImport(result, info))
+	elseif sub == "export" then
+		local name
+		if arg ~= "" then
+			name = FindProfileName(arg)
+			if not name then
+				ns.Print("Scale not found.")
+				return
+			end
+		end
+		local tag, skipped = ns.GetPawnTag(name)
+		if not tag then
+			ns.Print(skipped)
+			return
+		end
+		ns.Print("Pawn scale tag of \"" .. (name or ns.GetActiveProfileName()) .. "\" (the Export button of the options window gives one you can copy):")
+		print("  " .. tag)
+		if #skipped > 0 then
+			ns.Print("Not in the tag (Pawn has no name for them): " .. table.concat(skipped, ", ") .. ".")
+		end
+		return
 	else
 		local name = FindProfileName(rest)
 		if not name then
-			ns.Print("Profile not found. Use /ju profile to list profiles.")
+			ns.Print("Scale not found. Use /ju scale to list scales.")
 			return
 		end
 		ns.SetActiveProfile(name)
-		ns.Print("Switched to profile \"" .. name .. "\".")
+		ns.Print("Switched to scale \"" .. name .. "\".")
 	end
 	ns.NotifyConfigChanged()
 end
@@ -852,7 +1331,7 @@ local function HandleDump(rest)
 		return
 	end
 	local total, breakdown = ns.ComputeScore(stats)
-	print("  Score with profile \"" .. ns.GetActiveProfileName() .. "\": " .. ns.FormatNumber(total, 4))
+	print("  Score with scale \"" .. ns.GetActiveProfileName() .. "\": " .. ns.FormatNumber(total, 4))
 	for _, entry in ipairs(breakdown) do
 		print("    " .. entry.label .. ": " .. ns.FormatNumber(entry.value, 3) .. " x " .. ns.FormatNumber(entry.weight, 3)
 			.. " = " .. ns.FormatNumber(entry.contribution, 3) .. " (" .. entry.source .. ")")
@@ -885,11 +1364,17 @@ SlashCmdList["JIMMYSUTILS"] = function(msg)
 		PrintList()
 	elseif command == "set" then
 		HandleSet(rest)
-	elseif command == "profile" then
+	elseif command == "scale" then
 		HandleProfile(rest)
+	elseif command == "profile" then -- the settings profiles (it used to be an unlisted alias of /ju scale)
+		if ns.HandleSettingsProfileCommand then
+			ns.HandleSettingsProfileCommand(rest)
+		else
+			ns.Print("The settings profiles are not available.")
+		end
 	elseif command == "reset" then
 		ns.ResetActiveProfile()
-		ns.Print("Weights of profile \"" .. ns.GetActiveProfileName() .. "\" reset to the defaults.")
+		ns.Print("Weights of scale \"" .. ns.GetActiveProfileName() .. "\" reset to the defaults.")
 		ns.NotifyConfigChanged()
 	elseif command == "dump" then
 		HandleDump(rest)
@@ -946,7 +1431,17 @@ end
 
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
+loader:RegisterEvent("PLAYER_LOGIN")
 loader:SetScript("OnEvent", function(self, event, loadedName)
+	if event == "PLAYER_LOGIN" then
+		-- The realm is known by now: the choices that older versions kept in the character's own saved variables move into the account data
+		-- (when the realm was already known at load, that happened then).
+		self:UnregisterEvent("PLAYER_LOGIN")
+		if db then
+			CurrentKey()
+		end
+		return
+	end
 	if loadedName ~= addonName then
 		return
 	end
@@ -972,8 +1467,20 @@ loader:SetScript("OnEvent", function(self, event, loadedName)
 	if ns.InitProfit then
 		ns.InitProfit(db)
 	end
+	if ns.InitProfessionWindow then
+		ns.InitProfessionWindow(db)
+	end
+	if ns.InitAuctionScores then
+		ns.InitAuctionScores(db)
+	end
+	if ns.InitAuctionHouseResize then
+		ns.InitAuctionHouseResize(db)
+	end
 	if ns.InitMinimap then
 		ns.InitMinimap(db)
+	end
+	if ns.InitSettingsProfiles then
+		ns.InitSettingsProfiles(db) -- after the features: it snapshots (and applies) their settings
 	end
 	if ns.InitOptions then
 		ns.InitOptions()
