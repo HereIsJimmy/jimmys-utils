@@ -18,6 +18,12 @@ local addonName, ns = ...
 	yet). Without a result price nothing can be said and the profit is unknown. Items are priced by their base item ID, so gear with a
 	random suffix or bonus IDs gets the price of its base item.
 
+	Recipe price: what the item that teaches a recipe costs (ns.GetRecipeItemPrice) and, from it, how many crafts it takes for the profit
+	to pay that back (info.breakEven). The price is the vendor price from the bundled game data (ns.RecipeVendorPrices, only for the
+	recipes Wowhead lists as sold by a vendor for gold, at the base price, before reputation discounts), else Auctionator's price of the
+	item (drop-only recipes, or sold only for tokens), else none. The game data's buy price of any other item is never used: items that
+	only drop have one too, and it means nothing.
+
 	Prices are read through a small cache that lives for a refresh of a window (ns.ResetProfitCache) and, failing that, a couple of
 	seconds, so a long list does not ask Auctionator over and over but a price that changed is picked up soon.
 
@@ -272,6 +278,27 @@ local function UnitCost(api, itemID)
 	return auction, auction ~= nil
 end
 
+-- What the item that teaches a recipe costs, in copper: its vendor price when a vendor sells it for gold (ns.RecipeVendorPrices, by
+-- the teaching item, base price), else its auction price when Auctionator is loaded. Returns the price, "vendor" or "auction", and the
+-- item's ID; nil when the recipe has no teaching item or no price is known.
+function ns.GetRecipeItemPrice(recipeID)
+	local teachers = PlainTable(ns.RecipeTeachers)
+	local itemID = teachers and IsID(recipeID) and teachers[recipeID] or nil
+	if not IsID(itemID) then
+		return nil
+	end
+	local vendors = PlainTable(ns.RecipeVendorPrices)
+	local vendor = vendors and vendors[itemID] or nil
+	if IsID(vendor) then
+		return vendor, "vendor", itemID
+	end
+	local api = GetAPI()
+	local auction = api and AuctionPrice(api, itemID) or nil
+	if auction then
+		return auction, "auction", itemID
+	end
+end
+
 -- The slots of a recipe record: the saved ones, else the bundled recipe's, else one slot per ingredient (sorted by item).
 local function SlotsOf(record, recipeID)
 	local slots = {}
@@ -323,6 +350,9 @@ end
 --	unpriced lists one item ID of each of them (without a result price cost is nil as soon as an ingredient has no price)
 --	age = days since the oldest auction price used was seen (nil when Auctionator does not say), exact = every auction price used is
 --	exact data (not an estimate)
+--	recipePrice = what the item that teaches the recipe costs (copper, nil when unknown), recipePriceSource = "vendor" or "auction",
+--	recipeItem = that item's ID; breakEven = the number of crafts after which the profit has paid the recipe price (only with a
+--	recipePrice and a full, positive profit)
 function ns.GetRecipeProfit(recipeID, record)
 	if not ns.IsProfitAvailable() then
 		return nil
@@ -399,6 +429,13 @@ function ns.GetRecipeProfit(recipeID, record)
 	info.partial = info.profit ~= nil and #unpriced > 0
 	info.unpriced = #unpriced > 0 and unpriced or nil
 	info.missing = info.profit == nil or info.partial
+	local recipePrice, recipePriceSource, recipeItem = ns.GetRecipeItemPrice(recipeID)
+	if recipePrice then
+		info.recipePrice, info.recipePriceSource, info.recipeItem = recipePrice, recipePriceSource, recipeItem
+		if info.profit and not info.partial and info.profit > 0 then
+			info.breakEven = math.ceil(recipePrice / info.profit)
+		end
+	end
 	return info
 end
 
@@ -454,8 +491,18 @@ function ns.FormatProfit(info)
 	return "|c" .. GREEN .. FormatCoin(rounded) .. "|r"
 end
 
--- Adds the profit lines of ns.GetRecipeProfit's answer to a tooltip.
-function ns.AddProfitTooltip(tooltip, info)
+-- The crafts a recipe takes to pay for itself as short text ("10 crafts", "1 craft"), or nil when that is not known.
+function ns.FormatBreakEven(info)
+	local crafts = type(info) == "table" and info.breakEven or nil
+	if not IsID(crafts) then
+		return nil
+	end
+	return crafts .. (crafts == 1 and " craft" or " crafts")
+end
+
+-- Adds the profit lines of ns.GetRecipeProfit's answer to a tooltip; with showRecipePrice also what the recipe costs and when it pays
+-- for itself (for a recipe the character does not know yet).
+function ns.AddProfitTooltip(tooltip, info, showRecipePrice)
 	if not tooltip or type(info) ~= "table" then
 		return
 	end
@@ -470,6 +517,14 @@ function ns.AddProfitTooltip(tooltip, info)
 			text = text .. " (" .. info.count .. " made)"
 		end
 		tooltip:AddLine(text .. ", " .. math.floor(AH_CUT * 100 + 0.5) .. "% after the auction house cut", 0.8, 0.8, 0.8, true)
+	end
+	if showRecipePrice and PlainNumber(info.recipePrice) then
+		tooltip:AddLine("Recipe costs " .. FormatCoin(info.recipePrice) .. (info.recipePriceSource == "vendor" and " (vendor)" or " (auction house)"), 0.8, 0.8, 0.8)
+		if IsID(info.breakEven) then
+			tooltip:AddLine("Pays for itself after " .. info.breakEven .. (info.breakEven == 1 and " craft" or " crafts"), 0.8, 0.8, 0.8)
+		elseif PlainNumber(info.profit) and not info.partial and info.profit <= 0 then
+			tooltip:AddLine("Does not pay for itself at this profit", 0.8, 0.8, 0.8)
+		end
 	end
 	if info.partial then
 		tooltip:AddLine("Partial profit: the ingredients below count as free.", 1, 0.6, 0.2, true)

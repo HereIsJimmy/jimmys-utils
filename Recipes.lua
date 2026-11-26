@@ -2973,7 +2973,7 @@ local function AcquireRow(index)
 			ns.AddSkillUpTooltip(GameTooltip, entry.skillUp)
 		end
 		if entry.profit and ns.AddProfitTooltip then
-			ns.AddProfitTooltip(GameTooltip, entry.profit)
+			ns.AddProfitTooltip(GameTooltip, entry.profit, not entry.knownHere)
 		end
 		-- Only when the game gave one.
 		if entry.source then
@@ -3203,7 +3203,13 @@ RefreshWindow = function()
 		row.name:SetTextColor(color[1], color[2], color[3])
 		row.qty:SetText("x" .. entry.quantity)
 		ns.PlaceSkillUpText(row.name, row.chance, row.icon, row.qty, listWidth - (LIST_WIDTH - ROW_NAME_AREA), ns.FormatSkillUp(entry.skillUp))
-		row.profit:SetText(profitOn and ns.FormatProfit(entry.profit) or "")
+		-- A recipe this character does not know also says how many crafts it takes to pay for the recipe (grey, after the profit).
+		local profitText = profitOn and ns.FormatProfit(entry.profit) or ""
+		local breakEven = profitOn and not entry.knownHere and ns.FormatBreakEven(entry.profit) or nil
+		if breakEven then
+			profitText = profitText .. " |cff999999(" .. breakEven .. ")|r"
+		end
+		row.profit:SetText(profitText)
 		-- The detail text stops before the profit when there is one, else before the button.
 		row.detail:ClearAllPoints()
 		row.detail:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -2)

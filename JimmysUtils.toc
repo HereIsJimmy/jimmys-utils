@@ -2,7 +2,7 @@
 ## Title: Jimmy's Utils
 ## Notes: Adds a weighted stat score to item tooltips (and to the auction house list) using configurable per-stat coefficients, a target range check indicator (the spell icon, tinted red when out of range) for a spell you choose, a lookup of the recipes that use an item, a list of the characters you recently sent mail to next to the mailbox, and a window listing the recipes your mail has materials for. With Auctionator it also shows what each recipe earns when crafted and sold at the auction house.
 ## Author: Jimmy
-## Version: 1.8
+## Version: 1.9
 ## IconTexture: Interface\AddOns\JimmysUtils\Media\MinimapIcon
 ## AddonCompartmentFunc: JimmysUtils_OnAddonCompartmentClick
 ## AddonCompartmentFuncOnEnter: JimmysUtils_OnAddonCompartmentEnter

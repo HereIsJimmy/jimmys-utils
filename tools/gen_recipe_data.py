@@ -12,6 +12,10 @@ The data is Blizzard's game data (DB2 tables) for the WoW Forever client, downlo
   SpellEffect       what a spell does: Effect 24 ("create item") with the item it makes in EffectItemType and, in EffectBasePointsF, how
                     many (0 where the game decides it elsewhere; only counts above 1 are kept)
   SkillLine         the name of a skill line (DisplayName_lang, English here), for the lines the recipes belong to
+  ItemSparse        the vendor price of an item: BuyPrice (copper, for VendorStackCount items), about 5 MB
+
+Which recipe items a vendor sells for gold is not in the game data (BuyPrice is also set on items that only drop), so that list
+comes from Wowhead's "sold by vendor" recipe list for WoW Forever, kept by hand in tools/vendor_recipes.txt (see its header).
 
 The downloaded files are untrusted: they are kept in their own cache folder and only parsed as data (csv module).
 Python standard library only.
@@ -36,6 +40,7 @@ TABLES = {
     "SpellReagents": ("SpellID",) + tuple("Reagent_%d" % i for i in range(REAGENT_SLOTS)) + tuple("ReagentCount_%d" % i for i in range(REAGENT_SLOTS)),
     "SpellEffect": ("SpellID", "EffectIndex", "Effect", "EffectItemType", "EffectBasePointsF"),
     "SkillLine": ("ID", "DisplayName_lang"),
+    "ItemSparse": ("ID", "BuyPrice", "VendorStackCount"),
 }
 
 # Skill lines whose abilities are recipes of a profession window. The gathering abilities of Mining, Herbalism, Skinning and
@@ -50,6 +55,8 @@ CREATE_ITEM_EFFECT = 24  # SpellEffect.Effect "create item": EffectItemType is t
 # Known entries the downloaded data must agree with, so a changed table layout is noticed instead of written out.
 SANITY_THRESHOLDS = {2330: (55, 95)}  # Minor Healing Potion: yellow 55, grey 95
 SANITY_TEACHERS = {6617: 5640, 2335: 2555}  # Recipe: Rage Potion, Recipe: Swiftness Potion
+SANITY_VENDOR_PRICES = {5640: 100}  # Recipe: Rage Potion costs 1 silver
+SANITY_NO_VENDOR_PRICE = (2555, 14466)  # Recipe: Swiftness Potion and Pattern: Frostweave Tunic: not sold by a vendor for gold
 SANITY_REAGENTS = {6617: [5635, 1, 2450, 1, 3371, 1], 3170: [2447, 1, 2449, 2, 3371, 1]}  # Rage Potion, Weak Troll's Blood Potion
 SANITY_OUTPUTS = {6617: 5631, 3170: 3382}
 SANITY_OUTPUT_COUNTS = {2659: 2}  # Smelt Bronze makes 2 Bronze Bars (the count of every other sample above is 1, so it is not listed)
@@ -59,7 +66,9 @@ SANITY_REAGENTS.update({2538: [2672, 1], 2657: [2770, 1]})
 SANITY_OUTPUTS.update({2538: 2679, 2657: 2840})
 SANITY_LINE_NAMES = {171: "Alchemy", 185: "Cooking", 186: "Mining", 165: "Leatherworking", 197: "Tailoring"}
 
-OUTPUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Data", "RecipeData.lua")
+ADDON_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUTPUT = os.path.join(ADDON_DIR, "Data", "RecipeData.lua")
+VENDOR_RECIPES = os.path.join(ADDON_DIR, "tools", "vendor_recipes.txt")
 
 
 def download(table, cache_dir, refresh):
@@ -104,6 +113,24 @@ def to_float(value):
     return number if number == number and abs(number) != float("inf") else None
 
 
+def read_vendor_recipes(path):
+    """The item IDs in vendor_recipes.txt: '#' lines are comments, the rest is comma-separated item IDs."""
+    items = set()
+    with open(path, encoding="ascii") as fh:
+        for number, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            for token in line.split(","):
+                item = to_int(token.strip())
+                if item is None or item <= 0:
+                    raise SystemExit("%s line %d: %r is not an item ID" % (path, number, token))
+                items.add(item)
+    if not items:
+        raise SystemExit("%s: no item IDs" % path)
+    return items
+
+
 def build(cache_dir, refresh):
     abilities = read_table("SkillLineAbility", cache_dir, refresh)
     item_effects = read_table("ItemXItemEffect", cache_dir, refresh)
@@ -111,8 +138,11 @@ def build(cache_dir, refresh):
     spell_reagents = read_table("SpellReagents", cache_dir, refresh)
     spell_effects = read_table("SpellEffect", cache_dir, refresh)
     skill_line_rows = read_table("SkillLine", cache_dir, refresh)
+    item_sparse = read_table("ItemSparse", cache_dir, refresh)
+    vendor_items = read_vendor_recipes(VENDOR_RECIPES)
 
-    stats = {"rows": 0, "no_thresholds": 0, "invalid": 0, "conflicting": 0, "several_lines": 0, "bad_reagents": 0}
+    stats = {"rows": 0, "no_thresholds": 0, "invalid": 0, "conflicting": 0, "several_lines": 0, "bad_reagents": 0,
+             "vendor_unknown": 0, "vendor_no_price": 0}
     found = {}  # spell -> set of (yellow, grey) seen for it
     lines_of = {}  # spell -> set of profession skill lines it is an ability of
     for row in abilities:
@@ -215,6 +245,33 @@ def build(cache_dir, refresh):
         if line_names.get(line) != expected:
             raise SystemExit("sanity check failed: skill line %d is named %s, expected %s" % (line, line_names.get(line), expected))
 
+    # Vendor prices of the teaching items that a vendor sells for gold: the base price (before reputation discounts) per item.
+    taught_items = set(teachers.values())
+    wanted_prices = {}  # item -> (BuyPrice, VendorStackCount)
+    for row in item_sparse:
+        item = to_int(row["ID"])
+        if item in taught_items and item in vendor_items:
+            price, stack = to_int(row["BuyPrice"]), to_int(row["VendorStackCount"])
+            if price is None or stack is None or price < 0 or stack < 0:
+                raise SystemExit("ItemSparse: bad BuyPrice %r or VendorStackCount %r for item %s" % (row["BuyPrice"], row["VendorStackCount"], row["ID"]))
+            wanted_prices[item] = (price, stack)
+    vendor_prices = {}  # teaching item -> BuyPrice per item, in copper
+    for item in sorted(vendor_items):
+        if item not in taught_items:
+            stats["vendor_unknown"] += 1  # listed by Wowhead but not the teaching item of a recipe here
+        elif item not in wanted_prices or wanted_prices[item][0] <= 0:
+            stats["vendor_no_price"] += 1
+        else:
+            price, stack = wanted_prices[item]
+            vendor_prices[item] = int(round(price / stack)) if stack > 1 else price
+
+    for item, expected in SANITY_VENDOR_PRICES.items():
+        if vendor_prices.get(item) != expected:
+            raise SystemExit("sanity check failed: item %d has vendor price %s, expected %s" % (item, vendor_prices.get(item), expected))
+    for item in SANITY_NO_VENDOR_PRICE:
+        if item in vendor_prices:
+            raise SystemExit("sanity check failed: item %d has vendor price %s, expected none" % (item, vendor_prices[item]))
+
     for spell, expected in SANITY_THRESHOLDS.items():
         if thresholds.get(spell) != expected:
             raise SystemExit("sanity check failed: spell %d has thresholds %s, expected %s" % (spell, thresholds.get(spell), expected))
@@ -236,7 +293,7 @@ def build(cache_dir, refresh):
     for spell, expected in SANITY_SKILL_LINES.items():
         if skill_lines.get(spell) != expected:
             raise SystemExit("sanity check failed: spell %d is in skill line %s, expected %s" % (spell, skill_lines.get(spell), expected))
-    return thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, stats
+    return thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, vendor_prices, stats
 
 
 def pack(lines, entries, width=118):
@@ -251,16 +308,18 @@ def pack(lines, entries, width=118):
         lines.append(current)
 
 
-def render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names):
+def render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, vendor_prices):
     today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     lines = [
         "local addonName, ns = ...",
         "",
         "-- Generated by tools/gen_recipe_data.py. Do not edit; run `python -I tools/gen_recipe_data.py` to regenerate it.",
         "-- Source: Blizzard game data (DB2 tables) via wago.tools, WoW Forever build %s." % BUILD,
-        "--   SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect and SkillLine: " + (BASE_URL % "<table>") + "?build=" + BUILD,
+        "--   SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect, SkillLine and ItemSparse: " + (BASE_URL % "<table>") + "?build=" + BUILD,
+        "--   Which recipe items a vendor sells for gold comes from Wowhead (WoW Forever, recipes sold by a vendor): tools/vendor_recipes.txt.",
         "-- Generated: %s. %d recipes with skill-up thresholds, %d recipes with a teaching item, %d recipes with a skill line," % (today, len(thresholds), len(teachers), len(skill_lines)),
-        "--   %d with ingredients and %d with an item they make (%d of them make more than one); %d skill line names." % (len(reagents), len(outputs), len(output_counts), len(line_names)),
+        "--   %d with ingredients and %d with an item they make (%d of them make more than one); %d skill line names," % (len(reagents), len(outputs), len(output_counts), len(line_names)),
+        "--   %d teaching items with a vendor price." % len(vendor_prices),
         "-- ns.RecipeThresholds[spellID] = { yellow, grey }: the skill where the recipe turns yellow and where it turns grey (orange",
         "--   is below yellow, green is floor((yellow + grey) / 2)). ns.RecipeTeachers[spellID] = lowest item ID that teaches it.",
         "-- ns.RecipeSkillLines[spellID] = the profession skill line (GetProfessionInfo's skillLine) the recipe belongs to, or a sorted",
@@ -268,6 +327,8 @@ def render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, 
         "-- ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... } (flat); ns.RecipeOutputs[spellID] = the item it makes.",
         "-- ns.RecipeOutputCounts[spellID] = how many of that item one craft makes, only for the recipes that make more than one.",
         "-- ns.SkillLineNames[skillLine] = the English name of the skill line (only the lines the recipes belong to).",
+        "-- ns.RecipeVendorPrices[itemID] = the vendor price in copper, per item and before reputation discounts (ItemSparse.BuyPrice), of a",
+        "--   teaching item (a value of RecipeTeachers) that a vendor sells for gold. Other items have none: BuyPrice is also set on drops.",
         "",
         "ns.RecipeThresholds = {",
     ]
@@ -288,6 +349,8 @@ def render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, 
     pack(lines, ["[%d]=%d," % (spell, output_counts[spell]) for spell in sorted(output_counts)])
     lines += ["}", "", "ns.SkillLineNames = {"]
     pack(lines, ['[%d]="%s",' % (line, line_names[line].replace("\\", "\\\\").replace('"', '\\"')) for line in sorted(line_names)])
+    lines += ["}", "", "ns.RecipeVendorPrices = {"]
+    pack(lines, ["[%d]=%d," % (item, vendor_prices[item]) for item in sorted(vendor_prices)])
     lines += ["}", ""]
     return "\n".join(lines)
 
@@ -300,14 +363,16 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.cache, exist_ok=True)
-    thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, stats = build(args.cache, args.refresh)
+    thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, vendor_prices, stats = build(args.cache, args.refresh)
     os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
     with open(OUTPUT, "w", encoding="ascii", newline="\n") as fh:
-        fh.write(render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names))
+        fh.write(render(thresholds, teachers, skill_lines, reagents, outputs, output_counts, line_names, vendor_prices))
     print("build %s: %d recipes with thresholds, %d teaching items (profession rows %d, without thresholds %d, invalid %d, conflicting %d)"
           % (BUILD, len(thresholds), len(teachers), stats["rows"], stats["no_thresholds"], stats["invalid"], stats["conflicting"]))
     print("%d skill lines (%d recipes in several), %d with ingredients (%d bad slots), %d with an output (%d make more than one), %d skill line names"
           % (len(skill_lines), stats["several_lines"], len(reagents), stats["bad_reagents"], len(outputs), len(output_counts), len(line_names)))
+    print("%d vendor prices (%d items of the vendor list teach no recipe here, %d have no BuyPrice)"
+          % (len(vendor_prices), stats["vendor_unknown"], stats["vendor_no_price"]))
     print("wrote", OUTPUT)
 
 

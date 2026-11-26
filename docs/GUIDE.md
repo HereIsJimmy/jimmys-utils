@@ -354,7 +354,7 @@ Wowhead window shows. Recipes the game data has no teaching item for (trainer, q
 **Data source.** `Data/RecipeData.lua` is generated and must not be edited. It holds `ns.RecipeThresholds[spellID] = { yellow, grey }`,
 `ns.RecipeTeachers[spellID] = itemID` (the recipe ID the profession window uses is the spell ID), `ns.RecipeSkillLines[spellID] = skillLineID` (a sorted list `{ line, line }` for the few recipes that belong to several),
 `ns.RecipeReagents[spellID] = { itemID, count, itemID, count, ... }`, `ns.RecipeOutputs[spellID] = itemID`, `ns.RecipeOutputCounts[spellID] = count` (only for the recipes that make more than one item) and `ns.SkillLineNames[skillLineID] = "Alchemy"` (the English name of
-each skill line the recipes use), taken from the SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect and SkillLine tables of the WoW Forever client build named in the file's header, as published by wago.tools. They are
+each skill line the recipes use), taken from the SkillLineAbility, ItemXItemEffect, ItemEffect, SpellReagents, SpellEffect, SkillLine and ItemSparse tables of the WoW Forever client build named in the file's header, as published by wago.tools, and `ns.RecipeVendorPrices[itemID] = copper` (the base vendor price of a teaching item, per item; only for the recipe items listed in `tools/vendor_recipes.txt`, which comes from Wowhead's recipes sold by a vendor and is refreshed by hand as that file's header describes). They are
 Blizzard's game data; this addon is not affiliated with or endorsed by Blizzard. To regenerate it for a newer client build, change the `BUILD`
 constant in `tools/gen_recipe_data.py` and run, from the addon folder, `python -I tools/gen_recipe_data.py` (Python 3, standard library only;
 `--cache <folder>` keeps the downloaded CSV files, `--refresh` downloads them again). The script refuses to write the file if it no longer
@@ -459,7 +459,15 @@ price until Auctionator has seen them at a merchant, so when only some ingredien
 the profit is shown greyed with a `~` before it. A profit of 0 or more is green, a loss red.
 The tooltip of a recipe (in the recipes window and the materials window) adds what the ingredients cost, what the result sells for, how old
 the oldest auction data used is and, for a partial profit, which ingredients have no price yet (visit a vendor or scan the auction house). Items are priced by
-their base item ID, so gear with a random suffix gets the price of its base item. Prices are read again on every refresh of a window; Auctionator's own data only changes when you scan the auction house.
+their base item ID, so gear with a random suffix gets the price of its base item.
+
+**Recipe price.** For a recipe your current character does not know, the tooltip in the recipes window also says what the recipe item that teaches the recipe costs, "Recipe costs 9g 40s (vendor)" or "(auction house)", and how many
+crafts it takes for the profit to pay it back ("Pays for itself after 10 crafts"; "Does not pay for itself at this profit" when the profit is 0 or a loss; nothing when
+the profit is partial or unknown). The price is the vendor price from the bundled game data (`ns.RecipeVendorPrices`, the base price before reputation discounts) for the
+recipes Wowhead lists as sold by a vendor for gold (`tools/vendor_recipes.txt`), else Auctionator's auction price of the recipe item (recipes that drop, or that a vendor
+sells only for tokens), else nothing. The game data's buy price of any other item is never used: items that only drop have one too, and it means nothing. In the recipes
+window such a recipe also shows the crafts it takes to pay for it in grey next to its profit, for example `94s (10 crafts)`; recipes you know are already paid for and
+show the profit alone (here and in the materials window). Prices are read again on every refresh of a window; Auctionator's own data only changes when you scan the auction house.
 
 - **Recipes window and materials window.** When prices are available a **Sort: Name** / **Sort: Profit** button appears in the header (the choice is saved
   for all your characters, with each window's settings: `recipeLookup.sortProfit`, `mailMaterials.sortProfit`) and every recipe shows its profit on its
